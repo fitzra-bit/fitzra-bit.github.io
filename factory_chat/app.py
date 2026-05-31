@@ -47,6 +47,10 @@ def _get_session(sid: str) -> dict:
             "line": None,
             "baseline_profit": 0.0,
             "last_agent": None,
+            "plant_data": None,
+            "scenario_id": None,
+            "scenario_changes": {},
+            "scenario_in_flight": [],
         }
     return _sessions[sid]
 
@@ -241,6 +245,29 @@ async def validate_yaml(request: Request):
         }
     except Exception as e:
         return {"valid": False, "error": str(e)}
+
+
+@app.get("/scenarios")
+async def scenarios_list():
+    """Return all saved scenarios as JSON."""
+    from tools.scenario_manager import list_scenarios
+    return list_scenarios()
+
+
+@app.get("/scenarios/{scenario_id}")
+async def scenario_get(scenario_id: str):
+    from tools.scenario_manager import load_scenario
+    record = load_scenario(scenario_id)
+    if record is None:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return record
+
+
+@app.delete("/scenarios/{scenario_id}")
+async def scenario_delete(scenario_id: str):
+    from tools.scenario_manager import delete_scenario
+    ok = delete_scenario(scenario_id)
+    return {"ok": ok}
 
 
 @app.post("/reset")

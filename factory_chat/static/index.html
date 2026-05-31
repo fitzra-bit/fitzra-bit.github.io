@@ -31,6 +31,10 @@
       Configure
       <span class="tab-badge" id="badge-configure" style="display:none">READY</span>
     </button>
+    <button class="mode-tab" data-mode="scenarios" id="tab-scenarios">
+      Scenarios
+      <span class="tab-badge" id="badge-scenarios" style="display:none">NEW</span>
+    </button>
     <button class="mode-tab" data-mode="results" id="tab-results" disabled>
       Results
       <span class="tab-badge new" id="badge-results" style="display:none">NEW</span>
@@ -55,8 +59,9 @@
           <div class="bubble">
             <p>Hello. I'm OptiFlow — I help operations leaders find the highest-value investments in their production lines.</p>
             <p>Describe your manufacturing process — the steps, how fast each runs, where you're seeing losses — and I'll build a live simulation, identify your bottleneck, and find the optimal investment strategy.</p>
-            <p>Once the model is ready, a <strong>Configure</strong> tab will appear where you can review the process flow, select upgrades manually, edit the YAML directly, and see cost projections before running the optimization.</p>
-            <p class="hint">Or click <strong>Try example</strong> to load a pre-built 5-step widget factory.</p>
+            <p>The plant model is pre-loaded with real step specs and vendor quotes. Share new information — a vendor discount, a budget change, a market shift — and I'll save it as a named scenario with rationale so nothing gets lost.</p>
+            <p>Once a scenario is ready, the <strong>Configure</strong> tab lets you review the process flow, select upgrades, and run optimization. The <strong>Scenarios</strong> tab shows your saved analysis library.</p>
+            <p class="hint">Or click <strong>Try example</strong> to start with a pre-built 5-step precision components factory.</p>
           </div>
         </div>
       </div>
@@ -101,6 +106,33 @@
       <p>Go to the <strong>Chat</strong> tab and describe your process — OptiFlow will build the model and you can configure it here.</p>
     </div>
     <div id="cfg-root" style="display:none;height:100%;overflow-y:auto"></div>
+  </div>
+
+  <!-- SCENARIOS MODE -->
+  <div class="mode-panel" id="panel-scenarios">
+    <div class="scenarios-toolbar">
+      <span class="scenarios-title">Saved Scenarios</span>
+      <button class="btn-ghost" id="btn-refresh-scenarios">↺ Refresh</button>
+    </div>
+    <div class="scenarios-body" id="scenarios-body">
+      <div class="scenarios-empty" id="scenarios-empty">
+        <svg width="40" height="40" viewBox="0 0 48 48" fill="none" opacity=".25">
+          <rect x="8" y="6" width="32" height="36" rx="4" stroke="#89b4fa" stroke-width="2"/>
+          <line x1="15" y1="16" x2="33" y2="16" stroke="#89b4fa" stroke-width="2" stroke-linecap="round"/>
+          <line x1="15" y1="22" x2="33" y2="22" stroke="#89b4fa" stroke-width="2" stroke-linecap="round"/>
+          <line x1="15" y1="28" x2="25" y2="28" stroke="#89b4fa" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <p>No saved scenarios yet.</p>
+        <p>Create a scenario in the chat to see it here.</p>
+      </div>
+      <div class="scenarios-grid" id="scenarios-grid" style="display:none"></div>
+    </div>
+    <div class="scenarios-compare-bar" id="scenarios-compare-bar" style="display:none">
+      <span class="compare-label">Compare selected:</span>
+      <span id="compare-selected-names"></span>
+      <button class="btn-compare" id="btn-do-compare">Compare in Chat →</button>
+      <button class="btn-ghost" id="btn-clear-compare">Clear</button>
+    </div>
   </div>
 
   <!-- RESULTS MODE -->

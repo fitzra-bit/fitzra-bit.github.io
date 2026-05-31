@@ -1,0 +1,203 @@
+# OptiFlow Plant Model — Precision Components Manufacturing
+#
+# This file is the source of truth for your plant's physical reality:
+# step capacities, yields, OPEX, and the upgrade catalog with real vendor
+# quotes and dates. Edit this to match your actual facility.
+#
+# Changes to market assumptions (unit_value, budget) go in Scenarios,
+# not here — the plant model reflects what exists, not what might happen.
+
+plant:
+  name: "Precision Components — Plant 1"
+  location: "Detroit, MI"
+  description: "CNC precision parts for automotive tier 1 suppliers"
+
+market_assumptions:
+  unit: "component"
+  unit_value: 85.0             # current selling price per unit ($)
+  hours_per_period: 176.0      # working hours per period (standard month)
+  budget_available: 350000.0   # current capital budget available ($)
+  periods: 24                  # planning horizon (months)
+
+steps:
+  - id: raw_material_prep
+    name: "Raw Material Prep"
+    capacity: 160              # units/hour
+    yield_rate: 0.98
+    base_opex: 2000            # $/period
+
+  - id: cnc_machining
+    name: "CNC Machining"
+    capacity: 80               # ← primary bottleneck
+    yield_rate: 0.91           # ← worst yield on line
+    base_opex: 7000
+
+  - id: heat_treatment
+    name: "Heat Treatment"
+    capacity: 130
+    yield_rate: 0.97
+    base_opex: 4500
+
+  - id: quality_inspection
+    name: "Quality Inspection"
+    capacity: 110
+    yield_rate: 0.99
+    base_opex: 3200
+
+  - id: packaging_dispatch
+    name: "Packaging & Dispatch"
+    capacity: 220
+    yield_rate: 1.00
+    base_opex: 1800
+
+# Upgrade catalog: vendor-specific, with quote dates.
+# Costs here reflect current vendor quotes — override in Scenarios for
+# what-if pricing analysis.
+upgrade_catalog:
+
+  # ── CNC Machining ──────────────────────────────────────────────
+  - id: haas_vf2
+    name: "Haas VF2 CNC Machine"
+    vendor: "Haas Automation"
+    quote_date: "2026-01-15"
+    applies_to: cnc_machining
+    capex: 145000
+    opex_delta: 6000
+    capacity_delta: 80
+    yield_delta: 0
+    max_applications: 2
+    description: "Full duplicate CNC cell — doubles CNC throughput per application"
+
+  - id: kennametal_tooling
+    name: "Kennametal Premium Tooling"
+    vendor: "Kennametal"
+    quote_date: "2026-01-10"
+    applies_to: cnc_machining
+    capex: 14000
+    opex_delta: 1000
+    capacity_delta: 0
+    yield_delta: 0.04
+    max_applications: 1
+    description: "Higher-grade inserts reduce dimensional variation and scrap"
+
+  - id: hexagon_spc
+    name: "Hexagon SPC System"
+    vendor: "Hexagon"
+    quote_date: "2026-01-08"
+    applies_to: cnc_machining
+    capex: 22000
+    opex_delta: 500
+    capacity_delta: 0
+    yield_delta: 0.03
+    max_applications: 1
+    description: "Real-time statistical process control — catches drift before it becomes scrap"
+
+  - id: cnc_weekend_overtime
+    name: "Weekend Overtime Program"
+    vendor: "internal"
+    applies_to: cnc_machining
+    capex: 1500
+    opex_delta: 9000
+    capacity_delta: 42
+    yield_delta: 0
+    max_applications: 1
+    description: "2 weekend shifts add ~42 u/h equivalent capacity"
+
+  # ── Raw Material Prep ──────────────────────────────────────────
+  - id: prep_second_station
+    name: "Second Prep Station"
+    vendor: "in-house fabrication"
+    quote_date: "2026-01-12"
+    applies_to: raw_material_prep
+    capex: 38000
+    opex_delta: 1400
+    capacity_delta: 160
+    yield_delta: 0
+    max_applications: 1
+    description: "Duplicate prep cell — eliminates prep as a future bottleneck"
+
+  - id: prep_night_shift
+    name: "Prep Night Shift"
+    vendor: "internal"
+    applies_to: raw_material_prep
+    capex: 4000
+    opex_delta: 5500
+    capacity_delta: 96
+    yield_delta: 0
+    max_applications: 1
+    description: "Second crew adds 60% additional prep throughput"
+
+  # ── Heat Treatment ─────────────────────────────────────────────
+  - id: ipsen_furnace_2
+    name: "Ipsen Second Furnace"
+    vendor: "Ipsen"
+    quote_date: "2026-01-14"
+    applies_to: heat_treatment
+    capex: 65000
+    opex_delta: 3000
+    capacity_delta: 130
+    yield_delta: 0
+    max_applications: 1
+    description: "Second gas-fired furnace doubles heat treat capacity"
+
+  - id: ipsen_atmosphere
+    name: "Controlled Atmosphere Upgrade"
+    vendor: "Ipsen"
+    quote_date: "2026-01-14"
+    applies_to: heat_treatment
+    capex: 18000
+    opex_delta: 800
+    capacity_delta: 0
+    yield_delta: 0.02
+    max_applications: 1
+    description: "Nitrogen atmosphere control reduces oxidation scrap"
+
+  # ── Quality Inspection ─────────────────────────────────────────
+  - id: hexagon_cmm
+    name: "Hexagon CMM Machine"
+    vendor: "Hexagon"
+    quote_date: "2026-01-09"
+    applies_to: quality_inspection
+    capex: 55000
+    opex_delta: 1200
+    capacity_delta: 60
+    yield_delta: 0.005
+    max_applications: 1
+    description: "Automated CMM speeds throughput and slightly improves yield detection"
+
+  - id: qi_additional_inspector
+    name: "Additional QA Inspector"
+    vendor: "internal"
+    applies_to: quality_inspection
+    capex: 2000
+    opex_delta: 4800
+    capacity_delta: 50
+    yield_delta: 0
+    max_applications: 2
+    description: "Each additional inspector adds ~50 u/h inspection capacity"
+
+  # ── Packaging & Dispatch ───────────────────────────────────────
+  - id: wexxar_auto_pack
+    name: "Wexxar Semi-Auto Packing Line"
+    vendor: "Wexxar"
+    quote_date: "2026-01-11"
+    applies_to: packaging_dispatch
+    capex: 28000
+    opex_delta: -800
+    capacity_delta: 120
+    yield_delta: 0
+    max_applications: 1
+    description: "Reduces labor cost and adds packing throughput headroom"
+
+# In-flight investments: approved or in-progress but not yet operational.
+# These are shown distinctly in the flow diagram and can be included in
+# scenario projections as "expected future baseline".
+in_flight_investments: []
+# Example:
+# in_flight_investments:
+#   - upgrade_id: kennametal_tooling
+#     step_id: cnc_machining
+#     count: 1
+#     status: ordered          # approved | ordered | installing
+#     expected_operational: "2026-03-01"
+#     notes: "PO raised 2026-01-18, 6-week lead time"

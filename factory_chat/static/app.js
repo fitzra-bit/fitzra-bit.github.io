@@ -14,15 +14,18 @@ const resultsStatus = document.getElementById('results-status');
 const panels = {
   chat:      document.getElementById('panel-chat'),
   configure: document.getElementById('panel-configure'),
+  scenarios: document.getElementById('panel-scenarios'),
   results:   document.getElementById('panel-results'),
 };
 const tabs = {
   chat:      document.getElementById('tab-chat'),
   configure: document.getElementById('tab-configure'),
+  scenarios: document.getElementById('tab-scenarios'),
   results:   document.getElementById('tab-results'),
 };
 const badges = {
   configure: document.getElementById('badge-configure'),
+  scenarios: document.getElementById('badge-scenarios'),
   results:   document.getElementById('badge-results'),
 };
 
@@ -50,8 +53,8 @@ function switchMode(mode) {
   Object.entries(tabs).forEach(([k, el]) => {
     el.classList.toggle('active', k === mode);
   });
-  // Clear badge for the now-active tab
   if (badges[mode]) badges[mode].style.display = 'none';
+  if (mode === 'scenarios') loadScenarios();
 }
 
 Object.entries(tabs).forEach(([mode, tab]) => {
@@ -154,11 +157,16 @@ function showResultsHtml(html, label) {
 
 // ── Tool labels ───────────────────────────────────────────────────
 const TOOL_LABELS = {
-  create_scenario: 'Building simulation model…',
-  run_baseline:    'Running baseline simulation…',
-  run_optimizer:   'Optimizing investment strategy…',
-  compare_agents:  'Comparing all agents…',
-  update_scenario: 'Re-running with updated parameters…',
+  load_plant:               'Loading plant model…',
+  create_scenario:          'Creating scenario…',
+  build_custom_scenario:    'Building custom scenario…',
+  save_current_as_scenario: 'Saving scenario…',
+  list_scenarios:           'Loading saved scenarios…',
+  load_saved_scenario:      'Loading scenario…',
+  compare_scenarios:        'Comparing scenarios…',
+  run_baseline:             'Running baseline simulation…',
+  run_optimizer:            'Optimizing investment strategy…',
+  compare_agents:           'Comparing all agents…',
 };
 
 // ── Chat utilities ────────────────────────────────────────────────
@@ -288,6 +296,7 @@ async function send(text) {
 
           case 'scenario_ready':
             onScenarioReady(ev.scenario_json);
+            onScenarioSaved();
             break;
 
           case 'done':
@@ -302,6 +311,168 @@ async function send(text) {
     if (assistantText) bubble.innerHTML = marked.parse(assistantText);
     setBusy(false);
     scrollToBottom();
+  }
+}
+
+// ── Scenarios tab ────────────────────────────────────────────────
+let compareSelected = new Set(); // scenario IDs selected for comparison
+
+async function loadScenarios() {
+  const grid = document.getElementById('scenarios-grid');
+  const empty = document.getElementById('scenarios-empty');
+  if (!grid) return;
+
+  try {
+    const resp = await fetch('/scenarios');
+    const records = await resp.json();
+
+    if (!records || records.length === 0) {
+      grid.style.display = 'none';
+      empty.style.display = 'flex';
+      return;
+    }
+
+    empty.style.display = 'none';
+    grid.style.display = 'grid';
+    grid.innerHTML = records.map(r => renderScenarioCard(r)).join('');
+
+    grid.querySelectorAll('.btn-sc-load').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.id;
+        const name = btn.dataset.name;
+        switchMode('chat');
+        send(`Load scenario ${id} — ${name}`);
+      });
+    });
+
+    grid.querySelectorAll('.btn-sc-compare-toggle').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.id;
+        const name = btn.dataset.name;
+        if (compareSelected.has(id)) {
+          compareSelected.delete(id);
+          btn.classList.remove('active');
+        } else {
+          compareSelected.add(id);
+          btn.classList.add('active');
+        }
+        updateCompareBar();
+      });
+    });
+
+    grid.querySelectorAll('.btn-sc-delete').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.id;
+        if (!confirm(`Delete scenario "${btn.dataset.name}"?`)) return;
+        await fetch(`/scenarios/${id}`, { method: 'DELETE' });
+        compareSelected.delete(id);
+        updateCompareBar();
+        loadScenarios();
+      });
+    });
+
+    // Restore compare selections visually
+    compareSelected.forEach(id => {
+      const btn = grid.querySelector(`.btn-sc-compare-toggle[data-id="${id}"]`);
+      if (btn) btn.classList.add('active');
+    });
+
+  } catch (e) {
+    if (empty) empty.innerHTML = `<p style="color:var(--red)">Error loading scenarios: ${e.message}</p>`;
+  }
+}
+
+function renderScenarioCard(r) {
+  const TAG_CLASSES = {
+    'vendor-deal': 'sc-tag-vendor',
+    'market-change': 'sc-tag-market',
+    'budget': 'sc-tag-budget',
+    'in-flight': 'sc-tag-inflight',
+  };
+
+  const tags = (r.tags || []).map(t =>
+    `<span class="sc-tag ${TAG_CLASSES[t] || ''}">${t}</span>`
+  ).join('');
+
+  const changes = r.changes || {};
+  const changeParts = [];
+  if (changes.budget) changeParts.push(`Budget: ${fmtMoney(changes.budget)}`);
+  if (changes.unit_value) changeParts.push(`Price: $${changes.unit_value.toFixed(2)}`);
+  if (changes.upgrade_cost_overrides) {
+    const n = Object.keys(changes.upgrade_cost_overrides).length;
+    changeParts.push(`${n} upgrade repriced`);
+  }
+  const changesHtml = changeParts.length
+    ? `<div class="sc-changes">Changes: ${changeParts.join(' · ')}</div>`
+    : '';
+
+  const inFlight = r.in_flight || [];
+  const inflightHtml = inFlight.length
+    ? `<div class="sc-inflight">In-flight: ${inFlight.slice(0,2).map(i => i.upgrade_id).join(', ')}${inFlight.length > 2 ? '…' : ''}</div>`
+    : '';
+
+  const opt = r.optimization || {};
+  const optHtml = opt.profit_delta
+    ? `<div class="sc-optimization">▲ +${fmtMoney(opt.profit_delta)}/period optimized</div>`
+    : '';
+
+  const created = (r.created_at || '').slice(0, 10);
+  const nameSafe = (r.name || '').replace(/"/g, '&quot;');
+
+  return `
+<div class="scenario-card" data-id="${r.id}">
+  <div class="sc-header">
+    <div class="sc-name">${r.name}</div>
+    <div class="sc-date">${created}</div>
+  </div>
+  ${tags ? `<div class="sc-tags">${tags}</div>` : ''}
+  <div class="sc-rationale">${(r.rationale || '').slice(0, 140)}</div>
+  <div class="sc-id">ID: ${r.id}</div>
+  ${changesHtml}
+  ${inflightHtml}
+  ${optHtml}
+  <div class="sc-actions">
+    <button class="btn-sc-load" data-id="${r.id}" data-name="${nameSafe}">Load into session</button>
+    <button class="btn-sc-compare-toggle" data-id="${r.id}" data-name="${nameSafe}">Compare</button>
+    <button class="btn-sc-delete" data-id="${r.id}" data-name="${nameSafe}">✕</button>
+  </div>
+</div>`;
+}
+
+function updateCompareBar() {
+  const bar = document.getElementById('scenarios-compare-bar');
+  const namesEl = document.getElementById('compare-selected-names');
+  if (!bar || !namesEl) return;
+
+  if (compareSelected.size < 2) {
+    bar.style.display = 'none';
+    return;
+  }
+
+  bar.style.display = 'flex';
+  const ids = [...compareSelected];
+  namesEl.textContent = ids.join(', ');
+}
+
+document.getElementById('btn-refresh-scenarios')?.addEventListener('click', loadScenarios);
+
+document.getElementById('btn-do-compare')?.addEventListener('click', () => {
+  if (compareSelected.size < 2) return;
+  const ids = [...compareSelected];
+  switchMode('chat');
+  send(`Compare scenarios: ${ids.join(' and ')}`);
+});
+
+document.getElementById('btn-clear-compare')?.addEventListener('click', () => {
+  compareSelected.clear();
+  updateCompareBar();
+  document.querySelectorAll('.btn-sc-compare-toggle.active').forEach(b => b.classList.remove('active'));
+});
+
+// Show scenarios badge when a new scenario is saved
+function onScenarioSaved() {
+  if (activeMode !== 'scenarios' && badges.scenarios) {
+    badges.scenarios.style.display = 'inline';
   }
 }
 
