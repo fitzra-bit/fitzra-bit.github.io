@@ -6,13 +6,14 @@
 <title>OptiFlow — Process Intelligence</title>
 <link rel="stylesheet" href="/static/style.css">
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/js-yaml@4/dist/js-yaml.min.js"></script>
 </head>
 <body>
 
 <!-- ── Header ──────────────────────────────────────────────────── -->
 <header>
   <div class="brand">
-    <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+    <svg width="26" height="26" viewBox="0 0 28 28" fill="none">
       <rect x="2" y="14" width="6" height="12" rx="1.5" fill="#89b4fa"/>
       <rect x="11" y="8" width="6" height="18" rx="1.5" fill="#a6e3a1"/>
       <rect x="20" y="2" width="6" height="24" rx="1.5" fill="#f9e2af"/>
@@ -20,70 +21,105 @@
     <span class="brand-name">OptiFlow</span>
     <span class="brand-sub">Process Intelligence</span>
   </div>
+
+  <!-- Mode tabs -->
+  <nav class="mode-tabs">
+    <button class="mode-tab active" data-mode="chat" id="tab-chat">
+      Chat
+    </button>
+    <button class="mode-tab" data-mode="configure" id="tab-configure" disabled>
+      Configure
+      <span class="tab-badge" id="badge-configure" style="display:none">READY</span>
+    </button>
+    <button class="mode-tab" data-mode="results" id="tab-results" disabled>
+      Results
+      <span class="tab-badge new" id="badge-results" style="display:none">NEW</span>
+    </button>
+  </nav>
+
   <div class="header-actions">
-    <button class="btn-ghost" id="btn-load-example" title="Load example scenario">
-      Try example
-    </button>
-    <button class="btn-ghost" id="btn-new" title="New session">
-      ↺ New session
-    </button>
+    <button class="btn-ghost" id="btn-load-example">Try example</button>
+    <button class="btn-ghost" id="btn-new">↺ New session</button>
   </div>
 </header>
 
-<!-- ── Main split layout ───────────────────────────────────────── -->
+<!-- ── Main area ────────────────────────────────────────────────── -->
 <main>
 
-  <!-- Left: conversation -->
-  <section class="chat-panel">
-    <div class="messages" id="messages">
-      <div class="message assistant intro">
-        <div class="avatar">OF</div>
-        <div class="bubble">
-          <p>Hello. I'm OptiFlow — I help operations leaders find the highest-value investments in their production lines.</p>
-          <p>Describe your manufacturing process to me — the steps involved, how fast each runs, and where you're seeing losses — and I'll build a simulation, identify your bottleneck, and find the optimal investment strategy within your budget.</p>
-          <p class="hint">Or click <strong>Try example</strong> to load a pre-built 5-step widget factory.</p>
+  <!-- CHAT MODE -->
+  <div class="mode-panel active" id="panel-chat">
+    <section class="chat-panel">
+      <div class="messages" id="messages">
+        <div class="message assistant intro">
+          <div class="avatar">OF</div>
+          <div class="bubble">
+            <p>Hello. I'm OptiFlow — I help operations leaders find the highest-value investments in their production lines.</p>
+            <p>Describe your manufacturing process — the steps, how fast each runs, where you're seeing losses — and I'll build a live simulation, identify your bottleneck, and find the optimal investment strategy.</p>
+            <p>Once the model is ready, a <strong>Configure</strong> tab will appear where you can review the process flow, select upgrades manually, edit the YAML directly, and see cost projections before running the optimization.</p>
+            <p class="hint">Or click <strong>Try example</strong> to load a pre-built 5-step widget factory.</p>
+          </div>
         </div>
       </div>
-    </div>
+      <div class="input-bar">
+        <textarea id="input" rows="1"
+          placeholder="Describe your process, ask a question, or 'what if my budget doubles?'"
+          autocomplete="off" spellcheck="true"></textarea>
+        <button id="btn-send" aria-label="Send">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+        </button>
+      </div>
+    </section>
 
-    <div class="input-bar">
-      <textarea
-        id="input"
-        rows="1"
-        placeholder="Describe your process, ask a question, or try 'what if my budget doubles?'"
-        autocomplete="off"
-        spellcheck="true"
-      ></textarea>
-      <button id="btn-send" aria-label="Send">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="22" y1="2" x2="11" y2="13"></line>
-          <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-        </svg>
-      </button>
-    </div>
-  </section>
+    <!-- Right: last result preview -->
+    <section class="results-panel">
+      <div class="results-header">
+        <span class="results-title" id="results-title">Simulation Output</span>
+        <span class="results-status" id="results-status"></span>
+      </div>
+      <div class="results-body" id="results-body">
+        <div class="results-empty">
+          <svg width="48" height="48" viewBox="0 0 48 48" fill="none" opacity=".25">
+            <rect x="4" y="24" width="8" height="20" rx="2" fill="#89b4fa"/>
+            <rect x="16" y="14" width="8" height="30" rx="2" fill="#a6e3a1"/>
+            <rect x="28" y="6" width="8" height="38" rx="2" fill="#f9e2af"/>
+            <rect x="40" y="18" width="8" height="26" rx="2" fill="#cba6f7"/>
+          </svg>
+          <p>Simulation results will appear here</p>
+        </div>
+      </div>
+    </section>
+  </div>
 
-  <!-- Right: simulation results -->
-  <section class="results-panel">
-    <div class="results-header">
-      <span class="results-title" id="results-title">Simulation Output</span>
-      <span class="results-status" id="results-status"></span>
+  <!-- CONFIGURE MODE -->
+  <div class="mode-panel" id="panel-configure">
+    <div class="cfg-empty" id="cfg-empty">
+      <p>No scenario loaded yet.</p>
+      <p>Go to the <strong>Chat</strong> tab and describe your process — OptiFlow will build the model and you can configure it here.</p>
     </div>
-    <div class="results-body" id="results-body">
+    <div id="cfg-root" style="display:none;height:100%;overflow-y:auto"></div>
+  </div>
+
+  <!-- RESULTS MODE -->
+  <div class="mode-panel" id="panel-results">
+    <div class="results-full-body" id="results-full-body">
       <div class="results-empty">
-        <svg width="48" height="48" viewBox="0 0 48 48" fill="none" opacity=".3">
+        <svg width="48" height="48" viewBox="0 0 48 48" fill="none" opacity=".25">
           <rect x="4" y="24" width="8" height="20" rx="2" fill="#89b4fa"/>
           <rect x="16" y="14" width="8" height="30" rx="2" fill="#a6e3a1"/>
           <rect x="28" y="6" width="8" height="38" rx="2" fill="#f9e2af"/>
-          <rect x="40" y="18" width="8" height="26" rx="2" fill="#cba6f7"/>
         </svg>
-        <p>Simulation results will appear here</p>
+        <p>Run an optimization to see results</p>
       </div>
     </div>
-  </section>
+  </div>
 
 </main>
 
+<script src="/static/configurator.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

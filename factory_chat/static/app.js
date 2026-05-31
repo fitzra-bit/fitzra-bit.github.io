@@ -1,31 +1,167 @@
-/* OptiFlow frontend — streaming chat + live results panel */
+/* OptiFlow — app.js: chat, mode switching, SSE, configurator wiring */
 
 const SESSION_ID = crypto.randomUUID();
 
-const messagesEl = document.getElementById('messages');
-const inputEl    = document.getElementById('input');
-const sendBtn    = document.getElementById('btn-send');
+// ── DOM refs ─────────────────────────────────────────────────────
+const messagesEl  = document.getElementById('messages');
+const inputEl     = document.getElementById('input');
+const sendBtn     = document.getElementById('btn-send');
 const resultsBody = document.getElementById('results-body');
 const resultsTitle = document.getElementById('results-title');
 const resultsStatus = document.getElementById('results-status');
 
-let isBusy = false;
+// Mode panels & tabs
+const panels = {
+  chat:      document.getElementById('panel-chat'),
+  configure: document.getElementById('panel-configure'),
+  results:   document.getElementById('panel-results'),
+};
+const tabs = {
+  chat:      document.getElementById('tab-chat'),
+  configure: document.getElementById('tab-configure'),
+  results:   document.getElementById('tab-results'),
+};
+const badges = {
+  configure: document.getElementById('badge-configure'),
+  results:   document.getElementById('badge-results'),
+};
 
-// ── Tool label map ──────────────────────────────────────────────
+let activeMode = 'chat';
+let isBusy = false;
+let resultsFrame = null;
+let resultsFullFrame = null;
+
+// ── Configurator ─────────────────────────────────────────────────
+const cfgRoot = document.getElementById('cfg-root');
+const cfgEmpty = document.getElementById('cfg-empty');
+
+const configurator = new Configurator(cfgRoot, {
+  sessionId: SESSION_ID,
+  onRun: handleConfiguredRun,
+});
+
+// ── Mode switching ────────────────────────────────────────────────
+function switchMode(mode) {
+  if (mode === activeMode) return;
+  activeMode = mode;
+  Object.entries(panels).forEach(([k, el]) => {
+    el.classList.toggle('active', k === mode);
+  });
+  Object.entries(tabs).forEach(([k, el]) => {
+    el.classList.toggle('active', k === mode);
+  });
+  // Clear badge for the now-active tab
+  if (badges[mode]) badges[mode].style.display = 'none';
+}
+
+Object.entries(tabs).forEach(([mode, tab]) => {
+  tab.addEventListener('click', () => {
+    if (!tab.disabled) switchMode(mode);
+  });
+});
+
+// ── Unlock Configure tab when scenario is ready ───────────────────
+function onScenarioReady(scenarioJson) {
+  // Show configurator
+  cfgEmpty.style.display = 'none';
+  cfgRoot.style.display = 'block';
+  configurator.load(scenarioJson);
+
+  // Enable tab + badge
+  tabs.configure.disabled = false;
+  if (badges.configure) { badges.configure.style.display = 'inline'; }
+}
+
+// ── Run from configurator ─────────────────────────────────────────
+async function handleConfiguredRun(yamlText, selectedUpgrades, agent) {
+  // Show overlay
+  const overlay = document.createElement('div');
+  overlay.className = 'cfg-running-overlay';
+  overlay.innerHTML = `
+    <div class="run-spinner"></div>
+    <div class="run-label">Running ${agent === 'dqn' ? 'DQN' : 'Greedy ROI'} optimization…</div>`;
+  document.body.appendChild(overlay);
+
+  try {
+    const resp = await fetch('/run-configured', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session_id: SESSION_ID,
+        yaml_text: yamlText,
+        selected_upgrades: selectedUpgrades,
+        agent,
+        episodes: agent === 'dqn' ? 200 : 0,
+      }),
+    });
+
+    const data = await resp.json();
+    if (data.error) {
+      appendSystemMessage(`Optimization error: ${data.error}`);
+      return;
+    }
+
+    // Show results
+    showResultsHtml(data.html, 'Optimization Complete');
+
+    // Enable results tab
+    tabs.results.disabled = false;
+    if (badges.results) badges.results.style.display = 'inline';
+    switchMode('results');
+
+    // Add summary to chat
+    const delta = data.profit_delta;
+    const summary = `Optimization complete — **+${fmtMoney(delta)}/period** profit improvement, **${fmtMoney(data.capex_total)}** total invested.`;
+    appendSystemMessage(summary);
+
+  } catch (err) {
+    appendSystemMessage(`Run error: ${err.message}`);
+  } finally {
+    overlay.remove();
+  }
+}
+
+// ── Results display ───────────────────────────────────────────────
+function showResultsHtml(html, label) {
+  // Chat panel results
+  const empty = resultsBody.querySelector('.results-empty');
+  if (empty) empty.remove();
+
+  if (!resultsFrame) {
+    resultsFrame = document.createElement('iframe');
+    resultsFrame.id = 'results-frame';
+    resultsFrame.setAttribute('sandbox', 'allow-same-origin allow-scripts');
+    resultsBody.appendChild(resultsFrame);
+  }
+  resultsFrame.srcdoc = html;
+  if (label) {
+    resultsTitle.textContent = label;
+    resultsStatus.innerHTML = '<span class="status-dot"></span> Ready';
+  }
+
+  // Full results panel
+  const fullBody = document.getElementById('results-full-body');
+  const fe = fullBody.querySelector('.results-empty');
+  if (fe) fe.remove();
+  if (!resultsFullFrame) {
+    resultsFullFrame = document.createElement('iframe');
+    resultsFullFrame.id = 'results-full-frame';
+    resultsFullFrame.setAttribute('sandbox', 'allow-same-origin allow-scripts');
+    fullBody.appendChild(resultsFullFrame);
+  }
+  resultsFullFrame.srcdoc = html;
+}
+
+// ── Tool labels ───────────────────────────────────────────────────
 const TOOL_LABELS = {
   create_scenario: 'Building simulation model…',
   run_baseline:    'Running baseline simulation…',
   run_optimizer:   'Optimizing investment strategy…',
-  compare_agents:  'Running all agents for comparison…',
-  update_scenario: 'Updating scenario and re-optimizing…',
+  compare_agents:  'Comparing all agents…',
+  update_scenario: 'Re-running with updated parameters…',
 };
 
-// ── Utilities ───────────────────────────────────────────────────
-
-function scrollToBottom() {
-  messagesEl.scrollTop = messagesEl.scrollHeight;
-}
-
+// ── Chat utilities ────────────────────────────────────────────────
 function setBusy(busy) {
   isBusy = busy;
   sendBtn.disabled = busy;
@@ -37,19 +173,24 @@ function autoResize() {
   inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + 'px';
 }
 
-// ── Message creation ─────────────────────────────────────────────
+function scrollToBottom() {
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function fmtMoney(v) {
+  if (Math.abs(v) >= 1_000_000) return `$${(v/1_000_000).toFixed(2)}M`;
+  if (Math.abs(v) >= 1_000) return `$${(v/1_000).toFixed(1)}K`;
+  return `$${v.toFixed(0)}`;
+}
 
 function createMessage(role) {
   const wrap = document.createElement('div');
   wrap.className = `message ${role}`;
-
   const avatar = document.createElement('div');
   avatar.className = 'avatar';
   avatar.textContent = role === 'user' ? 'YOU' : 'OF';
-
   const bubble = document.createElement('div');
   bubble.className = 'bubble';
-
   wrap.appendChild(avatar);
   wrap.appendChild(bubble);
   messagesEl.appendChild(wrap);
@@ -58,26 +199,19 @@ function createMessage(role) {
 }
 
 function appendUserMessage(text) {
-  const bubble = createMessage('user');
-  bubble.textContent = text;
+  createMessage('user').textContent = text;
 }
 
-function createAssistantBubble() {
-  return createMessage('assistant');
+function appendSystemMessage(md) {
+  const bubble = createMessage('assistant');
+  bubble.innerHTML = marked.parse(md);
+  scrollToBottom();
 }
-
-function renderMarkdown(bubble, text) {
-  bubble.innerHTML = marked.parse(text);
-}
-
-// ── Tool call indicators ─────────────────────────────────────────
 
 function createToolCallEl(toolName) {
   const el = document.createElement('div');
   el.className = 'tool-call';
-  el.dataset.toolId = toolName + '_' + Date.now();
-  el.innerHTML = `
-    <div class="spinner"></div>
+  el.innerHTML = `<div class="spinner"></div>
     <span class="tool-name">${toolName}</span>
     <span>${TOOL_LABELS[toolName] || 'Running…'}</span>`;
   messagesEl.appendChild(el);
@@ -87,76 +221,25 @@ function createToolCallEl(toolName) {
 
 function markToolDone(el) {
   el.classList.add('done');
-  el.querySelector('.spinner').style.animation = 'none';
-  el.querySelector('.spinner').style.borderTopColor = 'var(--green)';
+  const s = el.querySelector('.spinner');
+  if (s) { s.style.animation = 'none'; s.style.borderTopColor = 'var(--green)'; }
 }
 
-// ── Results panel ────────────────────────────────────────────────
-
-let resultsFrame = null;
-let loadingOverlay = null;
-let activeToolEls = {};
-
-function showResultsLoading(toolName) {
-  resultsTitle.textContent = TOOL_LABELS[toolName] || 'Running…';
-  resultsStatus.innerHTML = '<span class="status-dot"></span> Running';
-
-  if (!loadingOverlay) {
-    loadingOverlay = document.createElement('div');
-    loadingOverlay.className = 'results-loading';
-    loadingOverlay.innerHTML = `
-      <div class="loading-ring"></div>
-      <div class="loading-label">${TOOL_LABELS[toolName] || 'Running simulation…'}</div>`;
-    resultsBody.appendChild(loadingOverlay);
-  } else {
-    loadingOverlay.querySelector('.loading-label').textContent =
-      TOOL_LABELS[toolName] || 'Running…';
-    loadingOverlay.style.display = 'flex';
-  }
-}
-
-function hideResultsLoading() {
-  if (loadingOverlay) loadingOverlay.style.display = 'none';
-}
-
-function setResultsHtml(html, toolName) {
-  hideResultsLoading();
-
-  // Remove empty state
-  const empty = resultsBody.querySelector('.results-empty');
-  if (empty) empty.remove();
-
-  // Replace or create iframe
-  if (!resultsFrame) {
-    resultsFrame = document.createElement('iframe');
-    resultsFrame.id = 'results-frame';
-    resultsFrame.setAttribute('sandbox', 'allow-same-origin allow-scripts');
-    resultsBody.appendChild(resultsFrame);
-  }
-
-  resultsFrame.srcdoc = html;
-  resultsTitle.textContent = TOOL_LABELS[toolName]?.replace('…', '') || 'Simulation Output';
-  resultsStatus.innerHTML = '<span class="status-dot"></span> Ready';
-}
-
-// ── Main send logic ──────────────────────────────────────────────
-
+// ── Main send ─────────────────────────────────────────────────────
 async function send(text) {
   if (!text.trim() || isBusy) return;
   setBusy(true);
-
   appendUserMessage(text);
   inputEl.value = '';
   autoResize();
 
-  // Prepare Claude's response bubble
-  const bubble = createAssistantBubble();
+  const bubble = createMessage('assistant');
   const cursor = document.createElement('span');
   cursor.className = 'cursor';
   bubble.appendChild(cursor);
 
   let assistantText = '';
-  let toolElMap = {};
+  const toolEls = {};
 
   try {
     const resp = await fetch('/chat', {
@@ -164,7 +247,6 @@ async function send(text) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: text, session_id: SESSION_ID }),
     });
-
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
     const reader = resp.body.getReader();
@@ -174,36 +256,38 @@ async function send(text) {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
-      buffer = lines.pop(); // keep incomplete line
+      buffer = lines.pop();
 
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
-        let event;
-        try { event = JSON.parse(line.slice(6)); } catch { continue; }
+        let ev;
+        try { ev = JSON.parse(line.slice(6)); } catch { continue; }
 
-        switch (event.type) {
+        switch (ev.type) {
           case 'text':
-            assistantText += event.delta;
-            renderMarkdown(bubble, assistantText);
+            assistantText += ev.delta;
+            bubble.innerHTML = marked.parse(assistantText);
             bubble.appendChild(cursor);
             scrollToBottom();
             break;
 
           case 'tool_start': {
-            const el = createToolCallEl(event.name);
-            toolElMap[event.name] = el;
-            showResultsLoading(event.name);
+            const el = createToolCallEl(ev.name);
+            toolEls[ev.name] = el;
+            // Show loading in results panel
+            resultsStatus.innerHTML = `<span class="status-dot"></span> ${TOOL_LABELS[ev.name] || 'Running…'}`;
             break;
           }
 
           case 'tool_result_html':
-            setResultsHtml(event.html, event.tool_name);
-            if (toolElMap[event.tool_name]) {
-              markToolDone(toolElMap[event.tool_name]);
-            }
+            showResultsHtml(ev.html, ev.tool_name.replace(/_/g, ' '));
+            if (toolEls[ev.tool_name]) markToolDone(toolEls[ev.tool_name]);
+            break;
+
+          case 'scenario_ready':
+            onScenarioReady(ev.scenario_json);
             break;
 
           case 'done':
@@ -215,32 +299,23 @@ async function send(text) {
     bubble.innerHTML = `<span style="color:var(--red)">Error: ${err.message}</span>`;
   } finally {
     cursor.remove();
-    // Final markdown render without cursor
-    if (assistantText) renderMarkdown(bubble, assistantText);
-    hideResultsLoading();
+    if (assistantText) bubble.innerHTML = marked.parse(assistantText);
     setBusy(false);
     scrollToBottom();
   }
 }
 
 // ── Events ───────────────────────────────────────────────────────
-
 sendBtn.addEventListener('click', () => send(inputEl.value));
-
-inputEl.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    send(inputEl.value);
-  }
+inputEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(inputEl.value); }
 });
-
 inputEl.addEventListener('input', autoResize);
 
 document.getElementById('btn-new').addEventListener('click', async () => {
   if (isBusy) return;
   await fetch('/reset', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: SESSION_ID }),
   });
   location.reload();
@@ -248,24 +323,21 @@ document.getElementById('btn-new').addEventListener('click', async () => {
 
 document.getElementById('btn-load-example').addEventListener('click', () => {
   if (isBusy) return;
-  const example = `I run a 5-step widget manufacturing operation.
+  inputEl.value = `I run a 5-step widget manufacturing operation.
 
-Step 1 — Raw Material Prep: runs at about 160 units/hour, 98% yield. Labor and materials cost around $2,000/month.
+Step 1 — Raw Material Prep: 160 units/hour, 98% yield. $2,000/month labor and materials.
 
-Step 2 — CNC Machining: this is our problem area. We're only getting 80 units/hour and our scrap rate is around 9% (so 91% yield). Machine time and tooling runs about $7,000/month.
+Step 2 — CNC Machining: this is our problem area. 80 units/hour and 9% scrap rate (91% yield). $7,000/month.
 
-Step 3 — Heat Treatment: 130 units/hour, 97% yield, $4,500/month in energy and labor.
+Step 3 — Heat Treatment: 130 units/hour, 97% yield, $4,500/month.
 
 Step 4 — Quality Inspection: 110 units/hour, 99% yield, $3,200/month.
 
-Step 5 — Packaging & Dispatch: 220 units/hour, 100% yield, $1,800/month.
+Step 5 — Packaging: 220 units/hour, 100% yield, $1,800/month.
 
-Each widget sells for $85. We work standard hours — about 176 hours a month. We have $350,000 available for capital investment and want to understand where to put it over the next 2 years.`;
-
-  inputEl.value = example;
+Each widget sells for $85. Standard 176 working hours/month. $350,000 available for investment over 24 months.`;
   autoResize();
   inputEl.focus();
 });
 
-// ── Init ─────────────────────────────────────────────────────────
 inputEl.focus();

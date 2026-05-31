@@ -223,7 +223,44 @@ def tool_create_scenario(inputs: dict, session: dict) -> dict:
         f"{n_upgrades} upgrade options. "
         + _line_text_summary(line, "baseline")
     )
-    return {"text": text, "html": _render_pipeline_html(line, f"{line.name} — Baseline")}
+    # Build scenario_json so the frontend can render the interactive configurator
+    scenario_json = {
+        "name": line.name,
+        "description": line.description,
+        "unit": line.unit,
+        "unit_value": line.unit_value,
+        "budget": line.budget,
+        "hours_per_period": line.hours_per_period,
+        "periods": line.periods,
+        "steps": [
+            {
+                "id": s.id,
+                "name": s.name,
+                "capacity": s.base_capacity,
+                "yield_rate": s.base_yield_rate,
+                "base_opex": s.base_opex,
+                "upgrades": [
+                    {
+                        "id": u.id,
+                        "name": u.name,
+                        "description": u.description,
+                        "capex": u.capex,
+                        "opex_delta": u.opex_delta,
+                        "capacity_delta": u.capacity_delta,
+                        "yield_delta": u.yield_delta,
+                        "max_applications": u.max_applications,
+                    }
+                    for u in s.upgrades
+                ],
+            }
+            for s in line.steps
+        ],
+    }
+    return {
+        "text": text,
+        "html": _render_pipeline_html(line, f"{line.name} — Baseline"),
+        "scenario_json": scenario_json,
+    }
 
 
 def tool_run_baseline(session: dict) -> dict:
