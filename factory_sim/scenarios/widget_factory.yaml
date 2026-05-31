@@ -1,0 +1,141 @@
+scenario:
+  name: "Widget Factory"
+  description: >
+    5-step widget manufacturing line. CNC Machining is the bottleneck
+    and has the worst yield. The RL agent should discover that upgrading
+    machining yield before adding capacity unlocks the most value.
+  unit: "widget"
+  unit_value: 85.0          # revenue per widget ($)
+  hours_per_period: 176.0   # standard working month (22 days × 8 hrs)
+  budget: 350000.0          # total investment available ($)
+  periods: 24               # months for payback / ROI analysis
+
+steps:
+  - id: raw_prep
+    name: "Raw Material Prep"
+    capacity: 160           # units/hour
+    yield_rate: 0.98
+    base_opex: 2000         # $/period
+    upgrades:
+      - id: prep_extra_station
+        name: "Second Prep Station"
+        description: "Duplicate the prep area; doubles raw throughput."
+        capex: 38000
+        opex_delta: 1400
+        capacity_delta: 160
+        yield_delta: 0
+        max_applications: 1
+
+      - id: prep_night_shift
+        name: "Night Shift Labor"
+        description: "Add a second crew for 60% more capacity."
+        capex: 4000
+        opex_delta: 5500
+        capacity_delta: 96
+        yield_delta: 0
+        max_applications: 1
+
+  - id: cnc_machining
+    name: "CNC Machining"
+    capacity: 80            # ← bottleneck
+    yield_rate: 0.91        # ← worst yield
+    base_opex: 7000
+    upgrades:
+      - id: cnc_machine_2
+        name: "Second CNC Machine"
+        description: "Adds a full duplicate CNC cell."
+        capex: 145000
+        opex_delta: 6000
+        capacity_delta: 80
+        yield_delta: 0
+        max_applications: 2
+
+      - id: cnc_tooling
+        name: "Premium Tooling Package"
+        description: "Higher-grade tooling improves dimensional accuracy."
+        capex: 14000
+        opex_delta: 1000
+        capacity_delta: 0
+        yield_delta: 0.04
+        max_applications: 1
+
+      - id: cnc_spc
+        name: "Statistical Process Control System"
+        description: "Real-time monitoring catches drift before it becomes scrap."
+        capex: 22000
+        opex_delta: 500
+        capacity_delta: 0
+        yield_delta: 0.03
+        max_applications: 1
+
+      - id: cnc_overtime
+        name: "Weekend Overtime"
+        description: "2 weekend shifts add ~40 u/h equivalent."
+        capex: 1500
+        opex_delta: 9000
+        capacity_delta: 42
+        yield_delta: 0
+        max_applications: 1
+
+  - id: heat_treat
+    name: "Heat Treatment"
+    capacity: 130
+    yield_rate: 0.97
+    base_opex: 4500
+    upgrades:
+      - id: ht_second_oven
+        name: "Second Furnace"
+        description: "Removes heat-treat as a future bottleneck."
+        capex: 65000
+        opex_delta: 3000
+        capacity_delta: 130
+        yield_delta: 0
+        max_applications: 1
+
+      - id: ht_atmosphere
+        name: "Controlled Atmosphere Upgrade"
+        description: "Reduces oxidation scrap."
+        capex: 18000
+        opex_delta: 800
+        capacity_delta: 0
+        yield_delta: 0.02
+        max_applications: 1
+
+  - id: quality_inspection
+    name: "Quality Inspection"
+    capacity: 110
+    yield_rate: 0.99
+    base_opex: 3200
+    upgrades:
+      - id: qi_cmm
+        name: "CMM Machine"
+        description: "Automated coordinate measurement; speeds throughput."
+        capex: 55000
+        opex_delta: 1200
+        capacity_delta: 60
+        yield_delta: 0.005
+        max_applications: 1
+
+      - id: qi_extra_inspector
+        name: "Second Inspector (Shift)"
+        description: "Additional headcount adds capacity."
+        capex: 2000
+        opex_delta: 4800
+        capacity_delta: 50
+        yield_delta: 0
+        max_applications: 2
+
+  - id: packaging
+    name: "Packaging & Dispatch"
+    capacity: 220
+    yield_rate: 1.00
+    base_opex: 1800
+    upgrades:
+      - id: pkg_auto
+        name: "Semi-Automated Packing Line"
+        description: "Reduces labor and increases throughput headroom."
+        capex: 28000
+        opex_delta: -800
+        capacity_delta: 120
+        yield_delta: 0
+        max_applications: 1
