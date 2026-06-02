@@ -26,7 +26,7 @@ DQN_CONFIG = {
 
 GAME_CONFIG = {
     "headless": False,
-    "game_url": "chrome://dino",
+    "game_url": "http://localhost:8766/game/dino.html",  # self-hosted game
     "poll_interval": 0.05,
     "canvas_width": 600,
     "canvas_height": 150,

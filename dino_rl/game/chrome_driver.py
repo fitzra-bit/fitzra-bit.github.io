@@ -4,10 +4,21 @@ import json
 import time
 from typing import Optional
 
+import os
+
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
+from selenium.common.exceptions import WebDriverException
+try:
+    from webdriver_manager.chrome import ChromeDriverManager
+    _HAS_WDM = True
+except ImportError:
+    _HAS_WDM = False
+
+# Paths for the bundled Playwright Chromium + matching ChromeDriver in this env
+_PW_CHROME   = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"
+_PW_DRIVER   = "/tmp/chromedriver-linux64/chromedriver"
 
 from config import GAME_CONFIG
 from game.game_state import GameState, Obstacle
@@ -57,13 +68,27 @@ _JS_START = (
 class DinoDriver:
     def __init__(self, headless: bool = GAME_CONFIG["headless"]):
         opts = Options()
+
+        # Use bundled Playwright Chromium if available, else let webdriver-manager find Chrome
+        if os.path.exists(_PW_CHROME):
+            opts.binary_location = _PW_CHROME
+
         if headless:
             opts.add_argument("--headless=new")
+        opts.add_argument("--no-sandbox")
+        opts.add_argument("--disable-dev-shm-usage")
+        opts.add_argument("--disable-gpu")
         opts.add_argument("--mute-audio")
         opts.add_argument("--disable-infobars")
         opts.add_argument("--window-size=800,400")
 
-        service = Service(ChromeDriverManager().install())
+        if os.path.exists(_PW_DRIVER):
+            service = Service(_PW_DRIVER)
+        elif _HAS_WDM:
+            service = Service(ChromeDriverManager().install())
+        else:
+            service = Service()
+
         self.driver = webdriver.Chrome(service=service, options=opts)
         self.ground_y: float = 93.0
         self._open_game()
@@ -73,7 +98,13 @@ class DinoDriver:
     # ------------------------------------------------------------------
 
     def _open_game(self):
-        self.driver.get(GAME_CONFIG["game_url"])
+        url = GAME_CONFIG["game_url"]
+        try:
+            self.driver.get(url)
+        except WebDriverException:
+            # chrome://dino and offline-trigger URLs raise an exception but still
+            # load the dino game page — swallow the error and continue.
+            pass
         time.sleep(1.0)
         self._start_game()
         time.sleep(0.5)

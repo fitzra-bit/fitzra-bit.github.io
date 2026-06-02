@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Dino RL</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#f7f7f7; display:flex; align-items:center; justify-content:center; height:100vh; font-family: monospace; }
+canvas { border-bottom: 2px solid #535353; image-rendering: pixelated; }
+#score { position:fixed; top:10px; right:16px; font-size:18px; color:#535353; font-weight:bold; font-family:monospace; }
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="300"></canvas>
+<div id="score">HI 00000  00000</div>
+<script>
+(function(){
+"use strict";
+
+// ── Constants ────────────────────────────────────────────────────
+const FPS        = 60;
+const GRAVITY    = 0.6;
+const JUMP_VEL   = -11;
+const DUCK_VEL   = 6;
+const GROUND_Y   = 220;
+const DINO_W     = 46;
+const DINO_H     = 52;
+const DINO_DUCK_H= 26;
+const DINO_X     = 80;
+
+const CACTI_CONFIGS = [
+  {w:17, h:35, count:1},
+  {w:34, h:35, count:2},
+  {w:51, h:35, count:3},
+  {w:17, h:50, count:1},
+  {w:34, h:50, count:2},
+];
+
+const BIRD_H = 20;
+const BIRD_W = 42;
+const BIRD_Y_OPTIONS = [GROUND_Y - 60, GROUND_Y - 90, GROUND_Y - 130]; // low/mid/high
+
+// ── Canvas ───────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+
+// ── Colors ───────────────────────────────────────────────────────
+const COL = {
+  dino:      '#535353',
+  cactus:    '#535353',
+  bird:      '#535353',
+  ground:    '#535353',
+  cloud:     '#ccc',
+};
+
+// ── Drawing helpers ──────────────────────────────────────────────
+function drawDino(x, y, ducking, frame) {
+  ctx.fillStyle = COL.dino;
+  if (ducking) {
+    // Ducking body
+    ctx.fillRect(x, y + DINO_H - DINO_DUCK_H, DINO_W + 10, DINO_DUCK_H);
+    // Eye
+    ctx.fillStyle = '#f7f7f7';
+    ctx.fillRect(x + DINO_W - 2, y + DINO_H - DINO_DUCK_H + 4, 6, 6);
+    ctx.fillStyle = COL.dino;
+    ctx.fillRect(x + DINO_W + 1, y + DINO_H - DINO_DUCK_H + 7, 3, 3);
+  } else {
+    // Body
+    ctx.fillRect(x + 6, y + 10, DINO_W - 6, DINO_H - 10);
+    // Head
+    ctx.fillRect(x + 16, y, 26, 20);
+    // Eye
+    ctx.fillStyle = '#f7f7f7';
+    ctx.fillRect(x + 32, y + 4, 8, 8);
+    ctx.fillStyle = COL.dino;
+    ctx.fillRect(x + 34, y + 6, 5, 5);
+    // Mouth opening
+    ctx.fillStyle = '#f7f7f7';
+    ctx.fillRect(x + 36, y + 14, 6, 3);
+    ctx.fillStyle = COL.dino;
+    // Legs (alternating)
+    if (!jumping) {
+      if (frame < 0.5) {
+        ctx.fillRect(x + 10, y + DINO_H - 20, 10, 20);
+        ctx.fillRect(x + 28, y + DINO_H - 10, 10, 10);
+      } else {
+        ctx.fillRect(x + 10, y + DINO_H - 10, 10, 10);
+        ctx.fillRect(x + 28, y + DINO_H - 20, 10, 20);
+      }
+    } else {
+      ctx.fillRect(x + 10, y + DINO_H - 12, 10, 12);
+      ctx.fillRect(x + 28, y + DINO_H - 6, 10, 6);
+    }
+  }
+}
+
+function drawCactus(ob) {
+  ctx.fillStyle = COL.cactus;
+  const cfg = ob.cfg;
+  ctx.fillRect(ob.x, GROUND_Y - cfg.h, cfg.w, cfg.h);
+  // Arms
+  if (cfg.count >= 2) {
+    ctx.fillRect(ob.x - 6, GROUND_Y - cfg.h * 0.7, 6, cfg.h * 0.4);
+    ctx.fillRect(ob.x + cfg.w, GROUND_Y - cfg.h * 0.7, 6, cfg.h * 0.4);
+  }
+}
+
+function drawBird(ob, frame) {
+  ctx.fillStyle = COL.bird;
+  const y = ob.y;
+  const x = ob.x;
+  // Body
+  ctx.fillRect(x + 10, y + 6, BIRD_W - 20, BIRD_H - 6);
+  // Beak
+  ctx.fillRect(x + BIRD_W - 10, y + 8, 10, 4);
+  // Wing (flapping)
+  if (frame < 0.5) {
+    ctx.fillRect(x + 6, y, BIRD_W - 12, 8);
+  } else {
+    ctx.fillRect(x + 6, y + BIRD_H - 4, BIRD_W - 12, 8);
+  }
+  // Eye
+  ctx.fillStyle = '#f7f7f7';
+  ctx.fillRect(x + BIRD_W - 18, y + 7, 5, 5);
+  ctx.fillStyle = COL.bird;
+  ctx.fillRect(x + BIRD_W - 16, y + 9, 3, 3);
+}
+
+function drawGround(offset) {
+  ctx.fillStyle = COL.ground;
+  ctx.fillRect(0, GROUND_Y, 800, 2);
+  // Ground bumps
+  for (let i = 0; i < 20; i++) {
+    const gx = ((i * 80 - offset) % 900) - 80;
+    ctx.fillRect(gx, GROUND_Y + 4, 12, 2);
+    ctx.fillRect(gx + 30, GROUND_Y + 6, 6, 2);
+  }
+}
+
+// ── Game state ───────────────────────────────────────────────────
+let dinoY      = GROUND_Y - DINO_H;
+let dinoVelY   = 0;
+let jumping    = false;
+let ducking    = false;
+let crashed    = false;
+let started    = false;
+let distanceRan= 0;
+let currentSpeed = 6;
+let highScore  = 0;
+let obstacles  = [];
+let groundOffset = 0;
+let frameCount = 0;
+let legFrame   = 0;
+let wingFrame  = 0;
+let lastTime   = null;
+let nextObstacleIn = 80; // frames until next obstacle
+let animId     = null;
+
+const groundY  = GROUND_Y;
+
+// ── TRex interface ───────────────────────────────────────────────
+const tRex = {
+  get yPos()       { return dinoY; },
+  get jumping()    { return jumping; },
+  get ducking()    { return ducking; },
+  get jumpVelocity(){ return dinoVelY; },
+  startJump(speed) {
+    if (!jumping && !crashed) {
+      jumping = true;
+      ducking = false;
+      dinoVelY = JUMP_VEL;
+    }
+  },
+  setDuck(v) {
+    if (v && !jumping && !crashed) {
+      ducking = true;
+    } else if (!v) {
+      ducking = false;
+    }
+  },
+};
+
+// ── Runner interface (matches game/chrome_driver.py expectations) ─
+const runner = {
+  get crashed()        { return crashed; },
+  get distanceRan()    { return distanceRan; },
+  get currentSpeed()   { return currentSpeed; },
+  get groundYPos()     { return groundY; },
+  get tRex()           { return tRex; },
+  get started()        { return started; },
+  set started(v)       { started = !!v; },
+  get activated()      { return started; },
+  set activated(v)     { started = !!v; },
+
+  get horizon() {
+    return {
+      obstacles: obstacles.map(ob => ({
+        xPos:   ob.x,
+        yPos:   ob.y !== undefined ? ob.y : (GROUND_Y - ob.cfg.h),
+        width:  ob.cfg.w,
+        typeConfig: {
+          height: ob.cfg.h,
+          type:   ob.type,
+        },
+      }))
+    };
+  },
+
+  restart() {
+    crashed      = false;
+    distanceRan  = 0;
+    currentSpeed = 6;
+    dinoY        = GROUND_Y - DINO_H;
+    dinoVelY     = 0;
+    jumping      = false;
+    ducking      = false;
+    obstacles    = [];
+    nextObstacleIn = 80;
+    groundOffset = 0;
+    started      = true;
+    if (!animId) loop(performance.now());
+  },
+};
+
+window.Runner = { instance_: runner };
+
+// ── Obstacle generation ──────────────────────────────────────────
+function spawnObstacle() {
+  const useBird = currentSpeed > 9 && Math.random() < 0.25;
+  if (useBird) {
+    obstacles.push({
+      type: 'PTERODACTYL',
+      x: 850,
+      y: BIRD_Y_OPTIONS[Math.floor(Math.random() * BIRD_Y_OPTIONS.length)],
+      cfg: { w: BIRD_W, h: BIRD_H },
+    });
+  } else {
+    const cfg = CACTI_CONFIGS[Math.floor(Math.random() * CACTI_CONFIGS.length)];
+    obstacles.push({ type: 'CACTUS_LARGE', x: 850, cfg });
+  }
+  nextObstacleIn = 60 + Math.random() * 80;
+}
+
+// ── Collision ────────────────────────────────────────────────────
+function checkCollision() {
+  const dh = ducking ? DINO_DUCK_H : DINO_H;
+  const dy = ducking ? GROUND_Y - DINO_DUCK_H : dinoY;
+  const dRight = DINO_X + DINO_W - 8;
+  const dBottom = dy + dh - 4;
+
+  for (const ob of obstacles) {
+    const obRight  = ob.x + ob.cfg.w;
+    const obTop    = ob.type === 'PTERODACTYL' ? ob.y : (GROUND_Y - ob.cfg.h);
+    const obBottom = ob.type === 'PTERODACTYL' ? ob.y + BIRD_H : GROUND_Y;
+
+    if (dRight > ob.x + 4 && DINO_X + 8 < obRight &&
+        dBottom > obTop + 4 && dy < obBottom) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// ── Update ───────────────────────────────────────────────────────
+function update(dt) {
+  if (crashed || !started) return;
+
+  const speedFactor = currentSpeed / 6;
+
+  // Physics
+  if (jumping) {
+    dinoVelY += GRAVITY;
+    dinoY    += dinoVelY;
+    if (dinoY >= GROUND_Y - DINO_H) {
+      dinoY    = GROUND_Y - DINO_H;
+      dinoVelY = 0;
+      jumping  = false;
+    }
+  }
+
+  // Move obstacles
+  for (const ob of obstacles) {
+    ob.x -= currentSpeed;
+  }
+  obstacles = obstacles.filter(ob => ob.x > -100);
+
+  // Spawn
+  nextObstacleIn -= 1;
+  if (nextObstacleIn <= 0) spawnObstacle();
+
+  // Distance & speed
+  distanceRan  += currentSpeed * 0.025;
+  currentSpeed  = Math.min(6 + distanceRan * 0.001, 13);
+  groundOffset  = (groundOffset + currentSpeed) % 80;
+
+  // Animation frames
+  legFrame  = (legFrame + 0.12 * speedFactor) % 1;
+  wingFrame = (wingFrame + 0.1)  % 1;
+  frameCount++;
+
+  // Collision
+  if (checkCollision()) {
+    crashed = true;
+    if (distanceRan > highScore) highScore = distanceRan;
+  }
+}
+
+// ── Draw ─────────────────────────────────────────────────────────
+function draw() {
+  ctx.clearRect(0, 0, 800, 300);
+  ctx.fillStyle = '#f7f7f7';
+  ctx.fillRect(0, 0, 800, 300);
+
+  drawGround(groundOffset);
+
+  if (!started && !crashed) {
+    // Welcome screen
+    ctx.fillStyle = '#535353';
+    ctx.font = 'bold 16px monospace';
+    ctx.fillText('SEND A MESSAGE TO START TRAINING', 200, 150);
+    drawDino(DINO_X, GROUND_Y - DINO_H, false, 0);
+    return;
+  }
+
+  if (crashed) {
+    ctx.fillStyle = '#535353';
+    ctx.font = 'bold 20px monospace';
+    ctx.fillText('G A M E  O V E R', 300, 130);
+    ctx.font = '13px monospace';
+    ctx.fillText('(auto-restart in training mode)', 270, 155);
+    drawDino(DINO_X, GROUND_Y - DINO_H, false, 0);
+    updateScoreEl();
+    return;
+  }
+
+  // Obstacles
+  for (const ob of obstacles) {
+    if (ob.type === 'PTERODACTYL') {
+      drawBird(ob, wingFrame);
+    } else {
+      drawCactus(ob);
+    }
+  }
+
+  // Dino
+  const dy = ducking ? GROUND_Y - DINO_DUCK_H : dinoY;
+  drawDino(DINO_X, dy, ducking, legFrame);
+
+  updateScoreEl();
+}
+
+function updateScoreEl() {
+  const hi  = String(Math.floor(highScore)).padStart(5, '0');
+  const cur = String(Math.floor(distanceRan)).padStart(5, '0');
+  document.getElementById('score').textContent = `HI ${hi}  ${cur}`;
+}
+
+// ── Main loop ────────────────────────────────────────────────────
+function loop(ts) {
+  const dt = lastTime ? Math.min((ts - lastTime) / 1000, 0.05) : 0.016;
+  lastTime = ts;
+  update(dt);
+  draw();
+  animId = requestAnimationFrame(loop);
+}
+
+// ── Auto-start (RL trainer drives the game via JS injection) ────
+started = true;
+animId  = requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>

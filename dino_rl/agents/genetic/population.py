@@ -58,7 +58,9 @@ class GeneticPopulation:
     def _tournament_select(
         self, rng: np.random.Generator, ranked: List[int], k: int = 5
     ) -> Tuple[int, int]:
-        candidates = rng.choice(ranked[: self.elite_n * 3], k, replace=False)
+        pool = ranked[: max(self.elite_n * 3, k + 1)]
+        k = min(k, len(pool))
+        candidates = rng.choice(pool, k, replace=False)
         candidates = sorted(candidates, key=lambda i: self.fitnesses[i], reverse=True)
         return candidates[0], candidates[1]
 
