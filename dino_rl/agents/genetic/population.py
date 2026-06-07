@@ -13,7 +13,8 @@ class GeneticPopulation:
         self.size = cfg["population_size"]
         self.elite_n = max(1, int(self.size * cfg["elite_fraction"]))
         self.mutation_rate = cfg["mutation_rate"]
-        self.mutation_scale = cfg["mutation_scale"]
+        # Support both legacy single value and new start/end/decay schedule.
+        self.mutation_scale = cfg.get("mutation_scale_start", cfg.get("mutation_scale", 0.10))
         self.layers = cfg["network_layers"]
 
         self.agents: List[NumpyNet] = [
@@ -27,14 +28,11 @@ class GeneticPopulation:
     # Evolution
     # ------------------------------------------------------------------
 
-    def evolve(self):
+    def evolve(self, mutation_scale: float = None):
         ranked = sorted(
             range(self.size), key=lambda i: self.fitnesses[i], reverse=True
         )
         elites = [self.agents[i].clone() for i in ranked[: self.elite_n]]
-
-        if self.fitnesses[ranked[0]] > self.best_ever:
-            self.best_ever = self.fitnesses[ranked[0]]
 
         new_agents: List[NumpyNet] = list(elites)
         rng = np.random.default_rng()
@@ -46,7 +44,7 @@ class GeneticPopulation:
                 self.agents[p2].get_flat_weights(),
                 rng,
             )
-            child_weights = self._mutate(child_weights, rng)
+            child_weights = self._mutate(child_weights, rng, mutation_scale)
             child = NumpyNet(self.layers)
             child.set_flat_weights(child_weights)
             new_agents.append(child)
@@ -75,11 +73,18 @@ class GeneticPopulation:
             child = np.concatenate([w1[:point], w2[point:]])
         return child.astype(np.float32)
 
-    def _mutate(self, weights: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    def _mutate(self, weights: np.ndarray, rng: np.random.Generator, scale: float = None) -> np.ndarray:
         mask = rng.random(len(weights)) < self.mutation_rate
-        noise = rng.normal(0, self.mutation_scale, len(weights)).astype(np.float32)
+        noise = rng.normal(0, scale or self.mutation_scale, len(weights)).astype(np.float32)
         weights[mask] += noise[mask]
         return weights
+
+    def inject_random(self, fraction: float):
+        """Replace the bottom `fraction` of agents with fresh random networks."""
+        n = max(1, int(self.size * fraction))
+        ranked = sorted(range(self.size), key=lambda i: self.fitnesses[i])
+        for i in ranked[:n]:
+            self.agents[i] = NumpyNet(self.layers)
 
     # ------------------------------------------------------------------
     # Stats

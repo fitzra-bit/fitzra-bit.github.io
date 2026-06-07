@@ -1,10 +1,9 @@
 """Selenium wrapper that drives the Chrome dino game via JS injection."""
 
 import json
+import os
 import time
 from typing import Optional
-
-import os
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -15,6 +14,54 @@ try:
     _HAS_WDM = True
 except ImportError:
     _HAS_WDM = False
+
+
+def _kill_tree(pid: int) -> None:
+    """Kill a process and all its children, ignoring errors if already gone."""
+    try:
+        import psutil
+        proc = psutil.Process(pid)
+        for child in proc.children(recursive=True):
+            try:
+                child.kill()
+            except psutil.NoSuchProcess:
+                pass
+        proc.kill()
+    except Exception:
+        pass
+
+
+def cleanup_all() -> int:
+    """Kill every chromedriver.exe and its spawned chrome.exe on this machine.
+
+    Returns the number of processes killed. Use this to recover from a crashed
+    run that left orphaned browser processes behind.
+    """
+    try:
+        import psutil
+    except ImportError:
+        # Fallback: taskkill on Windows, pkill on POSIX
+        import subprocess, sys
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/IM", "chromedriver.exe", "/T"],
+                           capture_output=True)
+            subprocess.run(["taskkill", "/F", "/IM", "chrome.exe", "/T"],
+                           capture_output=True)
+        else:
+            subprocess.run(["pkill", "-f", "chromedriver"], capture_output=True)
+            subprocess.run(["pkill", "-f", "chrome"], capture_output=True)
+        return -1  # count unknown without psutil
+
+    killed = 0
+    targets = {"chromedriver", "chromedriver.exe", "chrome", "chrome.exe"}
+    for proc in psutil.process_iter(["name", "pid"]):
+        try:
+            if proc.info["name"] in targets:
+                proc.kill()
+                killed += 1
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    return killed
 
 # Paths for the bundled Playwright Chromium + matching ChromeDriver in this env
 _PW_CHROME   = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"
@@ -90,6 +137,8 @@ class DinoDriver:
             service = Service()
 
         self.driver = webdriver.Chrome(service=service, options=opts)
+        # Track the ChromeDriver PID so we can force-kill it if quit() doesn't finish.
+        self._driver_pid: Optional[int] = getattr(self.driver.service.process, "pid", None)
         self.ground_y: float = 93.0
         self._open_game()
 
@@ -207,4 +256,10 @@ class DinoDriver:
         time.sleep(0.3)
 
     def close(self):
-        self.driver.quit()
+        try:
+            self.driver.quit()
+        except Exception:
+            pass
+        # Force-kill the ChromeDriver process and its children (Chrome) if still alive.
+        if self._driver_pid:
+            _kill_tree(self._driver_pid)

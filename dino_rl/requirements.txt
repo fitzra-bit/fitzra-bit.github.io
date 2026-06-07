@@ -3,3 +3,4 @@ webdriver-manager>=4.0.0
 numpy>=1.24.0
 rich>=13.0.0
 torch>=2.0.0
+psutil>=5.9.0
