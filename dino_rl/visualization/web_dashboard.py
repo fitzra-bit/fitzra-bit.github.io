@@ -200,6 +200,7 @@ body{background:#0d1117;color:#e6edf3;font-family:'Segoe UI',monospace;font-size
     <div id="rw-list">
       <div class="rw-row"><span class="rw-lbl">Survival reward</span>               <span class="pos" id="R-surv">—</span></div>
       <div class="rw-row"><span class="rw-lbl">Obstacle cleared  (+50)</span>       <span class="pos" id="R-clr">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Jump sweet  (+10 zone)</span>        <span class="pos" id="R-jsw">—</span></div>
       <div class="rw-row"><span class="rw-lbl">Jump clear  (+30 outcome)</span>     <span class="pos" id="R-jcl">—</span></div>
       <div class="rw-row"><span class="rw-lbl">Duck LOW bird  (+20)</span>           <span class="pos" id="R-dckb">—</span></div>
       <div class="rw-row"><span class="rw-lbl">Idle action  (−8/step)</span>        <span class="neg" id="R-idle">—</span></div>
@@ -406,6 +407,7 @@ function render(data) {
   const sr = c.shaped_rewards || {};
   document.getElementById('R-surv').textContent = fmt1(sr.survival||0);
   document.getElementById('R-clr').textContent  = fmt1(sr.clearing||0);
+  document.getElementById('R-jsw').textContent  = fmt1(sr.jump_sweet||0);
   document.getElementById('R-jcl').textContent  = fmt1(sr.jump_clear||0);
   document.getElementById('R-dckb').textContent = fmt1(sr.duck_bonus||0);
   document.getElementById('R-idle').textContent = fmt1(sr.idle||0);

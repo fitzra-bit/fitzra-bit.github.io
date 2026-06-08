@@ -143,10 +143,10 @@ class DQNTrainer:
                     return -self.cfg.get("wrong_duck_penalty", 30.0), "wrong_duck"
                 if action == 1:
                     # Outer approach (too early) → timing penalty
-                    # Sweet spot (TTC ≤ jump_sweet_max) → no penalty; outcome bonus fires on clear
                     if ttc > jump_sweet_max:
                         return -self.cfg.get("jump_outer_penalty", 10.0), "jump_outer"
-                    return 0.0, "none"
+                    # Sweet spot → small directional nudge; outcome bonus fires on clearing step
+                    return self.cfg.get("jump_sweet_bonus", 10.0), "jump_sweet"
             else:
                 # ── Bird: jump is always wrong ────────────────────────────────
                 if action == 1:
@@ -240,7 +240,7 @@ class DQNTrainer:
                 ep_actions        = {0: 0, 1: 0, 2: 0}
                 ep_shaped: dict[str, float] = {
                     "survival": 0.0, "clearing": 0.0,
-                    "jump_clear": 0.0, "duck_bonus": 0.0,
+                    "jump_sweet": 0.0, "jump_clear": 0.0, "duck_bonus": 0.0,
                     "idle": 0.0, "airborne": 0.0,
                     "jump_outer": 0.0, "wrong_duck": 0.0,
                     "wrong_jump": 0.0, "wrong_noop_bird": 0.0,
