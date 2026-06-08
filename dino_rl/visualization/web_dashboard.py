@@ -162,6 +162,7 @@ body{background:#0d1117;color:#e6edf3;font-family:'Segoe UI',monospace;font-size
   <div class="kpi y"><div class="v" id="H-avg">—</div><div class="l">Avg (50ep)</div></div>
   <div class="kpi" ><div class="v" id="H-steps">—</div><div class="l">Total Steps</div></div>
   <div class="kpi g"><div class="v" id="H-clr">—</div><div class="l">Total Clears</div></div>
+  <div class="kpi p"><div class="v" id="H-bclr">—</div><div class="l">Bird Clears</div></div>
   <div class="kpi r"><div class="v" id="H-loss">—</div><div class="l">Loss</div></div>
   <div class="kpi p"><div class="v" id="H-eps">—</div><div class="l">Epsilon</div></div>
   <div id="hdr-time"></div>
@@ -197,14 +198,19 @@ body{background:#0d1117;color:#e6edf3;font-family:'Segoe UI',monospace;font-size
   <div class="panel">
     <h2>Reward Breakdown — latest episode</h2>
     <div id="rw-list">
-      <div class="rw-row"><span class="rw-lbl">Survival reward</span> <span class="pos" id="R-surv">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Obstacle cleared  (+50)</span><span class="pos" id="R-clr">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Jump approach  (+15)</span> <span class="pos" id="R-jb">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Idle action  (−8/step)</span><span class="neg" id="R-idle">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Airborne spam  (−20)</span> <span class="neg" id="R-airb">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Wrong duck  (−30)</span>    <span class="neg" id="R-wdck">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Wrong jump  (−10)</span>    <span class="neg" id="R-wjmp">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Death penalty  (−100)</span><span class="neg" id="R-dth">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Survival reward</span>               <span class="pos" id="R-surv">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Obstacle cleared  (+50)</span>       <span class="pos" id="R-clr">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Jump sweet  (+10 zone)</span>        <span class="pos" id="R-jsw">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Jump clear  (+30 outcome)</span>     <span class="pos" id="R-jcl">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Duck LOW bird  (+20)</span>           <span class="pos" id="R-dckb">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Idle action  (−8/step)</span>        <span class="neg" id="R-idle">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Airborne spam  (−60)</span>          <span class="neg" id="R-airb">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Jump too early  (−10)</span>         <span class="neg" id="R-jout">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Landing danger  (−35)</span>         <span class="neg" id="R-land">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Wrong duck  (−30)</span>             <span class="neg" id="R-wdck">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Wrong jump  (−10)</span>             <span class="neg" id="R-wjmp">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Noop LOW bird  (−25)</span>          <span class="neg" id="R-wnob">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Death penalty  (−100)</span>         <span class="neg" id="R-dth">—</span></div>
     </div>
   </div>
 
@@ -228,12 +234,12 @@ body{background:#0d1117;color:#e6edf3;font-family:'Segoe UI',monospace;font-size
 <script>
 // ---- feature / Q-value metadata ----
 const FEATS = [
-  {n:'d1',  c:'#39d2fc', tip:'obs1 distance'},
-  {n:'h1',  c:'#5c9eff', tip:'obs1 height'},
+  {n:'d1',  c:'#39d2fc', tip:'obs1 distance (norm)'},
+  {n:'y1',  c:'#5c9eff', tip:'obs1 y-position: cactus ~1.1-1.2, bird-lo ~1.07, bird-mid ~0.87, bird-hi ~0.60'},
   {n:'w1',  c:'#5c9eff', tip:'obs1 width'},
-  {n:'b1',  c:'#bc8cff', tip:'obs1 is bird'},
-  {n:'d2',  c:'#39d2fc60',tip:'obs2 distance'},
-  {n:'h2',  c:'#5c9eff60',tip:'obs2 height'},
+  {n:'b1',  c:'#bc8cff', tip:'obs1 is bird (0=cactus 1=bird)'},
+  {n:'d2',  c:'#39d2fc60',tip:'obs2 distance (norm)'},
+  {n:'y2',  c:'#5c9eff60',tip:'obs2 y-position'},
   {n:'b2',  c:'#bc8cff60',tip:'obs2 is bird'},
   {n:'spd', c:'#e3b341', tip:'game speed'},
   {n:'dy',  c:'#3fb950', tip:'dino height above ground'},
@@ -347,12 +353,14 @@ function render(data) {
   // Header
   const scr50  = h.slice(-50).map(e => e.score || 0);
   const avg50  = scr50.length ? (scr50.reduce((a,b)=>a+b,0)/scr50.length).toFixed(0) : '—';
-  const totClr = h.reduce((s,e) => s + (e.cleared||0), 0);
+  const totClr  = h.reduce((s,e) => s + (e.cleared||0), 0);
+  const totBird = h.reduce((s,e) => s + (e.bird_clears||0), 0);
   document.getElementById('H-best').textContent  = (c.best||0).toFixed(0);
   document.getElementById('H-ep').textContent    = data.total_episodes;
   document.getElementById('H-avg').textContent   = avg50;
   document.getElementById('H-steps').textContent = fmtK(c.total_steps||0);
   document.getElementById('H-clr').textContent   = totClr;
+  document.getElementById('H-bclr').textContent  = totBird;
   document.getElementById('H-loss').textContent  = (c.loss||0).toFixed(2);
   document.getElementById('H-eps').textContent   = (c.epsilon||1).toFixed(3);
   document.getElementById('hdr-time').textContent= new Date().toLocaleTimeString();
@@ -399,11 +407,16 @@ function render(data) {
   const sr = c.shaped_rewards || {};
   document.getElementById('R-surv').textContent = fmt1(sr.survival||0);
   document.getElementById('R-clr').textContent  = fmt1(sr.clearing||0);
-  document.getElementById('R-jb').textContent   = fmt1(sr.jump_bonus||0);
+  document.getElementById('R-jsw').textContent  = fmt1(sr.jump_sweet||0);
+  document.getElementById('R-jcl').textContent  = fmt1(sr.jump_clear||0);
+  document.getElementById('R-dckb').textContent = fmt1(sr.duck_bonus||0);
   document.getElementById('R-idle').textContent = fmt1(sr.idle||0);
   document.getElementById('R-airb').textContent = fmt1(sr.airborne||0);
+  document.getElementById('R-jout').textContent = fmt1(sr.jump_outer||0);
+  document.getElementById('R-land').textContent = fmt1(sr.landing_danger||0);
   document.getElementById('R-wdck').textContent = fmt1(sr.wrong_duck||0);
   document.getElementById('R-wjmp').textContent = fmt1(sr.wrong_jump||0);
+  document.getElementById('R-wnob').textContent = fmt1(sr.wrong_noop_bird||0);
   document.getElementById('R-dth').textContent  = fmt1(sr.death||0);
 
   // Feature vector

@@ -157,7 +157,7 @@ def run_demo(args):
                     with _torch.no_grad():
                         t  = _torch.from_numpy(obs).unsqueeze(0)
                         qv = net(t).squeeze(0).numpy()
-                    feat_names = ["d1","h1","w1","b1","d2","h2","b2","spd","dy","vy","jmp","duc","ttc"]
+                    feat_names = ["d1","y1","w1","b1","d2","y2","b2","spd","dy","vy","jmp","duc","ttc"]
                     feat_str = "  ".join(f"{n}={v:.2f}" for n, v in zip(feat_names, obs))
                     q_str    = "  ".join(f"{_ACTIONS[i]}={qv[i]:.3f}" for i in range(3))
                     chosen   = _ACTIONS[int(qv.argmax())]

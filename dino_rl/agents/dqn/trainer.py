@@ -2,6 +2,7 @@
 
 import random
 import time
+from collections import deque
 from typing import TYPE_CHECKING, Callable, Optional
 
 import numpy as np
@@ -94,18 +95,19 @@ class DQNTrainer:
         Category labels match the dashboard's reward breakdown keys:
             airborne | idle | wrong_duck | jump_bonus | wrong_jump | none
 
-        Feature indices used:
-            obs[ 0] = obs1 distance (normalised)
-            obs[ 3] = obs1 is_bird flag
+        Feature indices (Phase 1 — only the ones actively used):
+            obs[ 3] = obs1 is_bird flag (0/1)
             obs[10] = dino_jumping (0/1)
             obs[12] = time-to-collision (pre-computed, [0,1])
+
+        Phase 1 philosophy: directional shaping only.
+            Jump near cactus → flat bonus (+15) to bootstrap exploration.
+            No timing accuracy penalties yet — those come in Phase 2 once
+            the model reliably clears obstacles and reaches score 1000+.
         """
-        # 1. Airborne jump spam — highest priority
+        # 1. Airborne jump spam
         if action == 1 and float(obs[10]) > 0.5:
             return -self.cfg.get("airborne_jump_penalty", 20.0), "airborne"
-
-        if action == 0:
-            return 0.0, "none"
 
         ttc       = float(obs[12])
         obs1_bird = float(obs[3]) > 0.5
@@ -114,22 +116,30 @@ class DQNTrainer:
         approach_far  = self.cfg.get("approach_ttc_far",   0.40)
         approach_near = self.cfg.get("approach_ttc_near",  0.05)
 
-        # 2. Idle — obstacle far relative to speed
+        # 2. Idle — penalise non-noop when obstacle is far
         if ttc > idle_ttc:
+            if action == 0:
+                return 0.0, "none"
             return -self.cfg.get("idle_action_penalty", 8.0), "idle"
 
-        # 3. Approach — teach correct action per obstacle type
+        # 3. Approach zone — simple directional shaping
         if approach_near < ttc < approach_far:
             if not obs1_bird:
+                # ── Cactus: jump is correct ──────────────────────────────────
+                if action == 0:
+                    return 0.0, "none"
                 if action == 2:
                     return -self.cfg.get("wrong_duck_penalty",  30.0), "wrong_duck"
                 if action == 1:
                     return  self.cfg.get("jump_approach_bonus", 15.0), "jump_bonus"
             else:
+                # ── Bird: jumping is wrong; noop/duck both survive mid/high ──
                 if action == 1:
                     return -self.cfg.get("wrong_jump_penalty", 10.0), "wrong_jump"
+                # noop and duck near bird: no shaping in Phase 1
+                return 0.0, "none"
 
-        # 4. Imminent — no extra shaping
+        # 4. Imminent — clearing/death reward takes over
         return 0.0, "none"
 
     def _action_type_reward(self, obs: np.ndarray, action: int) -> float:
@@ -185,6 +195,11 @@ class DQNTrainer:
         clr_close = self.cfg.get("clearing_close_threshold", 0.25)
         clr_far   = self.cfg.get("clearing_far_threshold",   0.55)
 
+        # Phase 1 completion detector — fires once when 20-ep rolling avg ≥ 1000
+        _phase1_window   = deque(maxlen=20)
+        _phase1_complete = False
+        _phase1_threshold = self.cfg.get("phase1_score_threshold", 1000.0)
+
         try:
             for ep in range(self.episodes):
                 driver.reset()
@@ -199,16 +214,20 @@ class DQNTrainer:
                 prev_obs1_dist = obs[0]
 
                 # Per-episode accumulators
-                ep_score       = 0.0
-                ep_steps       = 0
-                ep_loss_sum    = 0.0
-                ep_loss_n      = 0
-                ep_cleared     = 0
-                ep_actions     = {0: 0, 1: 0, 2: 0}
+                ep_score          = 0.0
+                ep_steps          = 0
+                ep_loss_sum       = 0.0
+                ep_loss_n         = 0
+                ep_cleared        = 0
+                ep_bird_clears    = 0
+                ep_bird_seen      = False   # flips True the moment a bird enters range
+                ep_actions        = {0: 0, 1: 0, 2: 0}
                 ep_shaped: dict[str, float] = {
-                    "survival": 0.0, "clearing": 0.0, "jump_bonus": 0.0,
-                    "idle": 0.0, "airborne": 0.0, "wrong_duck": 0.0,
-                    "wrong_jump": 0.0, "death": 0.0,
+                    "survival": 0.0, "clearing": 0.0,
+                    "jump_bonus": 0.0,
+                    "idle": 0.0, "airborne": 0.0,
+                    "wrong_duck": 0.0, "wrong_jump": 0.0,
+                    "death": 0.0,
                 }
                 last_q_vals    = [0.0, 0.0, 0.0]
                 last_obs       = obs.tolist()
@@ -225,11 +244,16 @@ class DQNTrainer:
                     if next_state is None:
                         break
 
-                    done          = next_state.crashed
-                    next_obs      = next_state.to_array()
+                    done           = next_state.crashed
+                    next_obs       = next_state.to_array()
                     curr_obs1_dist = next_obs[0]
 
-                    # Base reward components (tracked separately for dashboard)
+                    # Bird detection (tracked for stats; no console spam)
+                    obs1_is_bird = float(obs[3]) > 0.5
+                    if obs1_is_bird and obs[0] < 0.9 and not ep_bird_seen:
+                        ep_bird_seen = True
+
+                    # Base reward
                     if done:
                         base_reward = self.cfg.get("death_penalty", -100.0)
                         ep_shaped["death"] += base_reward
@@ -237,11 +261,15 @@ class DQNTrainer:
                         surv = (next_state.score - prev_score) * self.cfg.get("survival_reward_scale", 0.1)
                         ep_shaped["survival"] += surv
                         base_reward = surv
+
                         if prev_obs1_dist < clr_close and curr_obs1_dist > clr_far:
                             clr = self.cfg.get("clearing_bonus", 50.0)
                             ep_shaped["clearing"] += clr
                             base_reward += clr
                             ep_cleared  += 1
+                            if obs1_is_bird:
+                                ep_bird_clears += 1
+                                ep_bird_seen = False
 
                     # Action-type shaping
                     shaped, label = self._classify_action(obs, action)
@@ -281,6 +309,23 @@ class DQNTrainer:
                     self.best_score = ep_score
                 self._last_loss = ep_loss_sum / ep_loss_n if ep_loss_n else 0.0
 
+                # Phase 1 completion check
+                _phase1_window.append(ep_score)
+                if (not _phase1_complete
+                        and len(_phase1_window) == 20
+                        and sum(_phase1_window) / 20 >= _phase1_threshold):
+                    _phase1_complete = True
+                    avg20 = sum(_phase1_window) / 20
+                    print("\n" + "═" * 70)
+                    print(f"  ✔  PHASE 1 COMPLETE  —  20-ep avg: {avg20:.0f}  (threshold: {_phase1_threshold:.0f})")
+                    print(f"     Saving checkpoint → phase1_complete")
+                    if self.logger:
+                        print(f"     Load with:  --load {self.logger.run_dir / 'phase1_complete.pt'}")
+                    print(f"     Then uncomment Phase 2 block in config.py and restart.")
+                    print("═" * 70 + "\n")
+                    if self.logger:
+                        self.logger.save_model(self.online, "phase1_complete")
+
                 total_actions = sum(ep_actions.values()) or 1
                 stats = {
                     # Core stats (terminal dashboard + CSV logger)
@@ -292,6 +337,7 @@ class DQNTrainer:
                     "buffer":       len(self.buffer),
                     "loss":         round(self._last_loss, 4),
                     "cleared":      ep_cleared,
+                    "bird_clears":  ep_bird_clears,
                     # Extended stats (web dashboard)
                     "total_steps":  self.total_steps,
                     "action_pct": {

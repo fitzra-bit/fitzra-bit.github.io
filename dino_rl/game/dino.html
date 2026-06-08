@@ -154,6 +154,7 @@ let legFrame   = 0;
 let wingFrame  = 0;
 let lastTime   = null;
 let nextObstacleIn = 80; // frames until next obstacle
+let obstacleCount  = 0;  // total obstacles spawned this episode
 let animId     = null;
 
 const groundY  = GROUND_Y;
@@ -216,6 +217,7 @@ const runner = {
     ducking      = false;
     obstacles    = [];
     nextObstacleIn = 80;
+    obstacleCount  = 0;
     groundOffset = 0;
     started      = true;
     if (!animId) loop(performance.now());
@@ -226,7 +228,10 @@ window.Runner = { instance_: runner };
 
 // ── Obstacle generation ──────────────────────────────────────────
 function spawnObstacle() {
-  const useBird = currentSpeed > 9 && Math.random() < 0.25;
+  obstacleCount += 1;
+  // Phase 1: no birds — model learns to jump over cacti only.
+  // Phase 2: change to: obstacleCount >= 5 && Math.random() < 0.30
+  const useBird = false;
   if (useBird) {
     obstacles.push({
       type: 'PTERODACTYL',

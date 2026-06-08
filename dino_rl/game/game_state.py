@@ -40,11 +40,15 @@ class GameState:
 
         Features (13 total):
           0  distance to obstacle 1    (norm, 1.0 = far / none)
-          1  height of obstacle 1      (norm)
+          1  y-position of obstacle 1  (norm) ← top edge of sprite, NOT size
+               cacti:  ~1.1–1.2  (sit on ground; lower y = taller cactus)
+               bird lo: ~1.07   (must duck)
+               bird mid:~0.87   (can run under)
+               bird hi: ~0.60   (can run under)
           2  width of obstacle 1       (norm)
           3  obstacle 1 is bird        (0/1)
           4  distance to obstacle 2    (norm)
-          5  height of obstacle 2      (norm)
+          5  y-position of obstacle 2  (norm)
           6  obstacle 2 is bird        (0/1)
           7  current speed             (norm)
           8  dino y offset from ground (norm, 0=on ground, +up)
@@ -59,7 +63,7 @@ class GameState:
                 return [1.0, 0.0, 0.0, 0.0]
             return [
                 max(0.0, obs.x / dist_norm),
-                obs.height / y_norm,
+                obs.y / y_norm,           # vertical position of top edge (not size)
                 obs.width / dist_norm,
                 float(obs.is_bird),
             ]
