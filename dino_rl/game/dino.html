@@ -154,6 +154,7 @@ let legFrame   = 0;
 let wingFrame  = 0;
 let lastTime   = null;
 let nextObstacleIn = 80; // frames until next obstacle
+let obstacleCount  = 0;  // total obstacles spawned this episode
 let animId     = null;
 
 const groundY  = GROUND_Y;
@@ -216,6 +217,7 @@ const runner = {
     ducking      = false;
     obstacles    = [];
     nextObstacleIn = 80;
+    obstacleCount  = 0;
     groundOffset = 0;
     started      = true;
     if (!animId) loop(performance.now());
@@ -226,7 +228,11 @@ window.Runner = { instance_: runner };
 
 // ── Obstacle generation ──────────────────────────────────────────
 function spawnObstacle() {
-  const useBird = currentSpeed > 7 && Math.random() < 0.40;
+  obstacleCount += 1;
+  // Birds appear from obstacle #5 onward at a fixed 30% rate — no speed gate.
+  // This ensures duck is part of the learning signal from early in every episode,
+  // not just in rare long runs where speed happens to exceed a threshold.
+  const useBird = obstacleCount >= 5 && Math.random() < 0.30;
   if (useBird) {
     obstacles.push({
       type: 'PTERODACTYL',
