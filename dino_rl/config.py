@@ -58,6 +58,11 @@ DQN_CONFIG = {
     "wrong_jump_penalty":   10.0,   # jump near bird   → usually bad
     "airborne_jump_penalty": 20.0,  # double-jump spam → wasteful
 
+    # ── Phase 1 completion trigger ────────────────────────────────────────────
+    # Trainer prints a banner and saves "phase1_complete.pt" automatically when
+    # the 20-episode rolling average first exceeds this score.
+    "phase1_score_threshold": 1000.0,
+
     # ── Phase 2 additions (not active yet) ───────────────────────────────────
     # Uncomment and load from Phase 1 checkpoint when best score ≥ 1000:
     #

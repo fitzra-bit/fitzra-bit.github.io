@@ -2,6 +2,7 @@
 
 import random
 import time
+from collections import deque
 from typing import TYPE_CHECKING, Callable, Optional
 
 import numpy as np
@@ -194,6 +195,11 @@ class DQNTrainer:
         clr_close = self.cfg.get("clearing_close_threshold", 0.25)
         clr_far   = self.cfg.get("clearing_far_threshold",   0.55)
 
+        # Phase 1 completion detector — fires once when 20-ep rolling avg ≥ 1000
+        _phase1_window   = deque(maxlen=20)
+        _phase1_complete = False
+        _phase1_threshold = self.cfg.get("phase1_score_threshold", 1000.0)
+
         try:
             for ep in range(self.episodes):
                 driver.reset()
@@ -242,18 +248,10 @@ class DQNTrainer:
                     next_obs       = next_state.to_array()
                     curr_obs1_dist = next_obs[0]
 
-                    # Bird detection — obs[3] = is_bird flag, obs[0] = distance
+                    # Bird detection (tracked for stats; no console spam)
                     obs1_is_bird = float(obs[3]) > 0.5
                     if obs1_is_bird and obs[0] < 0.9 and not ep_bird_seen:
                         ep_bird_seen = True
-                        y1 = float(obs[1])
-                        if y1 > 0.95:
-                            bird_type = "LOW  (duck!)"
-                        elif y1 > 0.75:
-                            bird_type = "MID  (noop)"
-                        else:
-                            bird_type = "HIGH (noop)"
-                        print(f"\r  [Ep {ep:4d}] BIRD SPOTTED  type={bird_type}  y1={y1:.2f}  score={ep_score:.0f}")
 
                     # Base reward
                     if done:
@@ -271,9 +269,6 @@ class DQNTrainer:
                             ep_cleared  += 1
                             if obs1_is_bird:
                                 ep_bird_clears += 1
-                                y1 = float(obs[1])
-                                bird_type = "LOW" if y1 > 0.95 else "MID" if y1 > 0.75 else "HIGH"
-                                print(f"\r  [Ep {ep:4d}] BIRD CLEARED  type={bird_type}  score={ep_score:.0f}  total_bird_clears={ep_bird_clears}")
                                 ep_bird_seen = False
 
                     # Action-type shaping
@@ -313,6 +308,23 @@ class DQNTrainer:
                 if new_best:
                     self.best_score = ep_score
                 self._last_loss = ep_loss_sum / ep_loss_n if ep_loss_n else 0.0
+
+                # Phase 1 completion check
+                _phase1_window.append(ep_score)
+                if (not _phase1_complete
+                        and len(_phase1_window) == 20
+                        and sum(_phase1_window) / 20 >= _phase1_threshold):
+                    _phase1_complete = True
+                    avg20 = sum(_phase1_window) / 20
+                    print("\n" + "═" * 70)
+                    print(f"  ✔  PHASE 1 COMPLETE  —  20-ep avg: {avg20:.0f}  (threshold: {_phase1_threshold:.0f})")
+                    print(f"     Saving checkpoint → phase1_complete")
+                    if self.logger:
+                        print(f"     Load with:  --load {self.logger.run_dir / 'phase1_complete.pt'}")
+                    print(f"     Then uncomment Phase 2 block in config.py and restart.")
+                    print("═" * 70 + "\n")
+                    if self.logger:
+                        self.logger.save_model(self.online, "phase1_complete")
 
                 total_actions = sum(ep_actions.values()) or 1
                 stats = {
