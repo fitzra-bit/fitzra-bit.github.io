@@ -229,11 +229,9 @@ window.Runner = { instance_: runner };
 // ── Obstacle generation ──────────────────────────────────────────
 function spawnObstacle() {
   obstacleCount += 1;
-  // Phase 1: birds appear rarely (8%) so the model can learn to jump first.
-  // Low enough that most episodes are cactus-only, but birds still show up
-  // occasionally so they exist in the replay buffer.
-  // Phase 2: raise this to 0.30 once the model reliably clears score 1000+.
-  const useBird = obstacleCount >= 5 && Math.random() < 0.08;
+  // Phase 1: no birds — model learns to jump over cacti only.
+  // Phase 2: change to: obstacleCount >= 5 && Math.random() < 0.30
+  const useBird = false;
   if (useBird) {
     obstacles.push({
       type: 'PTERODACTYL',
