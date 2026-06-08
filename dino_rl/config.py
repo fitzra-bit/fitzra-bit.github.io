@@ -17,67 +17,54 @@ GENETIC_CONFIG = {
     "parallel_workers": 1,
 }
 
-# ── Phase 1 ──────────────────────────────────────────────────────────────────
-# Goal: learn to jump over cacti reliably and reach score 1000+.
-# Keep rewards simple — clearing bonus + death penalty + mild spam prevention.
-# No jump-accuracy tuning, no duck shaping.  Birds are present (30% from
-# obstacle 5) but the model just learns to noop under mid/high birds via the
-# death signal.  Once best score is consistently 1000+, load this checkpoint
-# and switch to Phase 2 config (accuracy + duck shaping).
+# ── Phase 1A — Pure outcome learning ─────────────────────────────────────────
+# Goal: model discovers that jumping near obstacles prevents death.
+# NO intermediate penalties — only death and clearing bonus.
+# Penalties during exploration bias Q(jump) negative before the model
+# has any sense of timing, causing it to converge on noop.
+# Add shaping layers in later phases once basic jumping is solid.
+#
+# Completion: 20-ep avg ≥ 200, clearing rate ≥ 0.5/ep  →  save checkpoint
+#             then move to Phase 1B (add airborne penalty only)
 DQN_CONFIG = {
-    "lr": 1e-4,                      # was 5e-4 — halved to stabilise oscillating loss
+    "lr": 1e-4,
     "gamma": 0.99,
     "epsilon_start": 1.0,
-    "epsilon_end": 0.02,
-    "epsilon_decay": 0.993,         # reaches ~0.02 by ep ~550
+    "epsilon_end": 0.15,            # stay exploratory longer — don't greedify too early
+    "epsilon_decay": 0.990,         # slower decay: ~0.15 by ep ~180, gives more exploration time
     "batch_size": 128,
-    "buffer_size": 20_000,          # was 50k — smaller so old random experiences age out faster
-    "target_update_freq": 1500,     # was 500 — give targets more time to stabilise before chasing them
+    "buffer_size": 20_000,
+    "target_update_freq": 1500,
     "network_layers": [13, 128, 64, 3],
     "max_steps_per_episode": 20_000,
     "poll_interval": 0.025,
 
-    # ── Core rewards ─────────────────────────────────────────────────────────
+    # ── Core rewards (the only active signals in Phase 1A) ───────────────────
     "death_penalty":          -100.0,
-    "survival_reward_scale":     0.1,   # score-delta × this per step
-    "clearing_bonus":           50.0,   # spike when any obstacle is cleared
+    "survival_reward_scale":     0.1,
+    "clearing_bonus":           50.0,
     "clearing_close_threshold":  0.25,
     "clearing_far_threshold":    0.55,
 
-    # ── Idle spam prevention ──────────────────────────────────────────────────
-    # TTC = obs1_dist / speed (speed-invariant).  Penalise non-noop when
-    # the obstacle is far so the model doesn't spam jump/duck all the time.
-    "idle_ttc_threshold":  0.60,
-    "idle_action_penalty":  8.0,
-    "approach_ttc_far":    0.40,    # approach zone: TTC 0.05–0.40
-    "approach_ttc_near":   0.05,    # imminent zone: TTC < 0.05
+    # ── Phase 1A completion trigger ───────────────────────────────────────────
+    "phase1_score_threshold": 200.0,   # 20-ep avg ≥ 200 → banner + checkpoint
 
-    # ── Approach-zone action shaping (Phase 1: directional, not accuracy) ────
-    "wrong_duck_penalty":   30.0,   # duck near cactus → likely death
-    "jump_approach_bonus":  30.0,   # raised from 15 — needs ~28+ to make Q(jump)>Q(noop) at current success rate
-    "wrong_jump_penalty":   10.0,   # jump near bird   → usually bad
-    "airborne_jump_penalty": 20.0,  # double-jump spam → wasteful
-
-    # ── Phase 1 completion trigger ────────────────────────────────────────────
-    # Trainer prints a banner and saves "phase1_complete.pt" automatically when
-    # the 20-episode rolling average first exceeds this score.
-    "phase1_score_threshold": 1000.0,
-
-    # ── Phase 2 additions (not active yet) ───────────────────────────────────
-    # Uncomment and load from Phase 1 checkpoint when best score ≥ 1000:
+    # ── Phase 1B (add after 1A checkpoint) ───────────────────────────────────
+    # Load 1A checkpoint, set epsilon_start: 0.3, then add only:
+    #   "airborne_jump_penalty": 10.0   # prevent double-jump waste
     #
-    # Jump accuracy:
-    #   "jump_sweet_bonus":          10.0,
-    #   "jump_clear_bonus":          30.0,
-    #   "jump_outer_penalty":        10.0,
-    #   "approach_ttc_jump_max":     0.25,
-    #   "airborne_jump_penalty":     30.0,  # raise from 20
-    #   "landing_danger_ttc":        0.15,
-    #   "landing_danger_penalty":    15.0,
+    # ── Phase 2 (add after 1B checkpoint, score ≥ 500) ───────────────────────
+    # Load 1B checkpoint, set epsilon_start: 0.2, then add:
+    #   "jump_approach_bonus":  10.0    # gentle nudge toward obstacle
+    #   "idle_action_penalty":   3.0    # very mild — obstacle far
+    #   "idle_ttc_threshold":    0.60
+    #   "approach_ttc_far":      0.25   # tighter window than before
+    #   "approach_ttc_near":     0.05
     #
-    # Duck / bird shaping:
-    #   "duck_approach_bonus":        20.0,
-    #   "wrong_noop_low_bird_penalty": 25.0,
+    # ── Phase 3 (convergence, score ≥ 1000) ──────────────────────────────────
+    # No new signals — run to convergence, epsilon_start: 0.1
+    #
+    # ── Phase 4+ (birds) — see curriculum plan ───────────────────────────────
 }
 
 GAME_CONFIG = {

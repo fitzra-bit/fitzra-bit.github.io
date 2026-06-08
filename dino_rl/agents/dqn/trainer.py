@@ -92,54 +92,11 @@ class DQNTrainer:
     def _classify_action(self, obs: np.ndarray, action: int) -> tuple[float, str]:
         """Return (shaped_reward, category_label) for action-type shaping.
 
-        Category labels match the dashboard's reward breakdown keys:
-            airborne | idle | wrong_duck | jump_bonus | wrong_jump | none
-
-        Feature indices (Phase 1 — only the ones actively used):
-            obs[ 3] = obs1 is_bird flag (0/1)
-            obs[10] = dino_jumping (0/1)
-            obs[12] = time-to-collision (pre-computed, [0,1])
-
-        Phase 1 philosophy: directional shaping only.
-            Jump near cactus → flat bonus (+15) to bootstrap exploration.
-            No timing accuracy penalties yet — those come in Phase 2 once
-            the model reliably clears obstacles and reaches score 1000+.
+        Phase 1A — pure outcome learning, no action shaping.
+        Only death penalty and clearing bonus are active.  No intermediate
+        penalties so Q-values are not biased against jump during exploration.
+        Shaping layers are added in later phases once basic jumping is learned.
         """
-        # 1. Airborne jump spam
-        if action == 1 and float(obs[10]) > 0.5:
-            return -self.cfg.get("airborne_jump_penalty", 20.0), "airborne"
-
-        ttc       = float(obs[12])
-        obs1_bird = float(obs[3]) > 0.5
-
-        idle_ttc      = self.cfg.get("idle_ttc_threshold", 0.60)
-        approach_far  = self.cfg.get("approach_ttc_far",   0.40)
-        approach_near = self.cfg.get("approach_ttc_near",  0.05)
-
-        # 2. Idle — penalise non-noop when obstacle is far
-        if ttc > idle_ttc:
-            if action == 0:
-                return 0.0, "none"
-            return -self.cfg.get("idle_action_penalty", 8.0), "idle"
-
-        # 3. Approach zone — simple directional shaping
-        if approach_near < ttc < approach_far:
-            if not obs1_bird:
-                # ── Cactus: jump is correct ──────────────────────────────────
-                if action == 0:
-                    return 0.0, "none"
-                if action == 2:
-                    return -self.cfg.get("wrong_duck_penalty",  30.0), "wrong_duck"
-                if action == 1:
-                    return  self.cfg.get("jump_approach_bonus", 15.0), "jump_bonus"
-            else:
-                # ── Bird: jumping is wrong; noop/duck both survive mid/high ──
-                if action == 1:
-                    return -self.cfg.get("wrong_jump_penalty", 10.0), "wrong_jump"
-                # noop and duck near bird: no shaping in Phase 1
-                return 0.0, "none"
-
-        # 4. Imminent — clearing/death reward takes over
         return 0.0, "none"
 
     def _action_type_reward(self, obs: np.ndarray, action: int) -> float:
