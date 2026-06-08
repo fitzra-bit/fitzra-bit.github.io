@@ -46,13 +46,18 @@ DQN_CONFIG = {
     "clearing_close_threshold":  0.25,
     "clearing_far_threshold":    0.55,
 
-    # ── Phase 1A completion trigger ───────────────────────────────────────────
+    # ── Phase 1B directional shaping (no idle punishment) ────────────────────
+    # Pure outcome (1A) plateaued at ~1.5 clears/ep after 750 eps — policy
+    # couldn't self-stabilise.  These two signals give directional labels
+    # without poisoning exploration the way the idle penalty did.
+    "approach_ttc_far":      0.35,   # approach zone upper bound (tighter than old 0.40)
+    "approach_ttc_near":     0.05,   # approach zone lower bound
+    "jump_approach_bonus":   10.0,   # +10 for jumping near cactus (not near bird)
+    "airborne_jump_penalty":  5.0,   # -5 for double-jump while already airborne
+
+    # ── Phase 1B completion trigger ───────────────────────────────────────────
     "phase1_score_threshold": 200.0,   # 20-ep avg ≥ 200 → banner + checkpoint
 
-    # ── Phase 1B (add after 1A checkpoint) ───────────────────────────────────
-    # Load 1A checkpoint, set epsilon_start: 0.3, then add only:
-    #   "airborne_jump_penalty": 10.0   # prevent double-jump waste
-    #
     # ── Phase 2 (add after 1B checkpoint, score ≥ 500) ───────────────────────
     # Load 1B checkpoint, set epsilon_start: 0.2, then add:
     #   "jump_approach_bonus":  10.0    # gentle nudge toward obstacle

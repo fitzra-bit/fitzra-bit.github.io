@@ -92,11 +92,38 @@ class DQNTrainer:
     def _classify_action(self, obs: np.ndarray, action: int) -> tuple[float, str]:
         """Return (shaped_reward, category_label) for action-type shaping.
 
-        Phase 1A — pure outcome learning, no action shaping.
-        Only death penalty and clearing bonus are active.  No intermediate
-        penalties so Q-values are not biased against jump during exploration.
-        Shaping layers are added in later phases once basic jumping is learned.
+        Phase 1B — directional nudge only, no idle punishment.
+        Two signals added on top of Phase 1A outcomes:
+
+          1. airborne_jump_penalty: small penalty for double-jumping while
+             already airborne.  Safe to add now that the model knows jumping
+             is sometimes good.  Prevents wasting the jump mid-arc.
+
+          2. jump_approach_bonus: small reward for jumping while in the
+             approach zone (TTC between approach_near and approach_far).
+             Gives a constant directional label — "jump near obstacle = good"
+             — so the model can maintain the association across variance.
+             NO idle penalty: that was the poison in prior configs.
+
+        Feature indices used:
+            obs[ 3] = obs1 is_bird flag (0/1)
+            obs[10] = dino_jumping (0/1)
+            obs[12] = time-to-collision (pre-computed, [0,1])
         """
+        # 1. Airborne double-jump — small penalty, safe at this stage
+        if action == 1 and float(obs[10]) > 0.5:
+            return -self.cfg.get("airborne_jump_penalty", 5.0), "airborne"
+
+        ttc          = float(obs[12])
+        obs1_bird    = float(obs[3]) > 0.5
+        approach_far = self.cfg.get("approach_ttc_far",  0.35)
+        approach_near= self.cfg.get("approach_ttc_near", 0.05)
+
+        # 2. Approach zone: nudge jump near cactus, no other shaping
+        if approach_near < ttc < approach_far and not obs1_bird:
+            if action == 1:
+                return self.cfg.get("jump_approach_bonus", 10.0), "jump_bonus"
+
         return 0.0, "none"
 
     def _action_type_reward(self, obs: np.ndarray, action: int) -> float:
