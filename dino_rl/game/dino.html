@@ -229,10 +229,11 @@ window.Runner = { instance_: runner };
 // ── Obstacle generation ──────────────────────────────────────────
 function spawnObstacle() {
   obstacleCount += 1;
-  // Birds appear from obstacle #5 onward at a fixed 30% rate — no speed gate.
-  // This ensures duck is part of the learning signal from early in every episode,
-  // not just in rare long runs where speed happens to exceed a threshold.
-  const useBird = obstacleCount >= 5 && Math.random() < 0.30;
+  // Phase 1: birds appear rarely (8%) so the model can learn to jump first.
+  // Low enough that most episodes are cactus-only, but birds still show up
+  // occasionally so they exist in the replay buffer.
+  // Phase 2: raise this to 0.30 once the model reliably clears score 1000+.
+  const useBird = obstacleCount >= 5 && Math.random() < 0.08;
   if (useBird) {
     obstacles.push({
       type: 'PTERODACTYL',
