@@ -226,7 +226,7 @@ window.Runner = { instance_: runner };
 
 // ── Obstacle generation ──────────────────────────────────────────
 function spawnObstacle() {
-  const useBird = currentSpeed > 9 && Math.random() < 0.25;
+  const useBird = currentSpeed > 7 && Math.random() < 0.40;
   if (useBird) {
     obstacles.push({
       type: 'PTERODACTYL',
