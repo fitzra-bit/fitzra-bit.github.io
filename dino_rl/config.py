@@ -17,54 +17,62 @@ GENETIC_CONFIG = {
     "parallel_workers": 1,
 }
 
+# ── Phase 1 ──────────────────────────────────────────────────────────────────
+# Goal: learn to jump over cacti reliably and reach score 1000+.
+# Keep rewards simple — clearing bonus + death penalty + mild spam prevention.
+# No jump-accuracy tuning, no duck shaping.  Birds are present (30% from
+# obstacle 5) but the model just learns to noop under mid/high birds via the
+# death signal.  Once best score is consistently 1000+, load this checkpoint
+# and switch to Phase 2 config (accuracy + duck shaping).
 DQN_CONFIG = {
     "lr": 5e-4,
     "gamma": 0.99,
     "epsilon_start": 1.0,
     "epsilon_end": 0.02,
-    "epsilon_decay": 0.993,         # reaches ~0.02 by ep ~900
+    "epsilon_decay": 0.993,         # reaches ~0.02 by ep ~550
     "batch_size": 128,
     "buffer_size": 50_000,
     "target_update_freq": 500,
     "network_layers": [13, 128, 64, 3],
     "max_steps_per_episode": 20_000,
-    "poll_interval": 0.025,         # 25ms — doubles control resolution for jump timing
-    "death_penalty": -100.0,
-    "survival_reward_scale": 0.1,   # score-delta × this per step
-    "clearing_bonus": 50.0,         # reward spike when an obstacle is cleared
-    "clearing_close_threshold": 0.25,  # obs1_dist must have been this close (normalised)
-    "clearing_far_threshold": 0.55,    # obs1_dist must jump to at least this far after
-    # Action-type shaping — all zones now use TTC (time-to-collision = obs1_dist/speed)
-    # so thresholds are speed-invariant.  At 2× speed the same TTC fires at 2× dist.
+    "poll_interval": 0.025,
+
+    # ── Core rewards ─────────────────────────────────────────────────────────
+    "death_penalty":          -100.0,
+    "survival_reward_scale":     0.1,   # score-delta × this per step
+    "clearing_bonus":           50.0,   # spike when any obstacle is cleared
+    "clearing_close_threshold":  0.25,
+    "clearing_far_threshold":    0.55,
+
+    # ── Idle spam prevention ──────────────────────────────────────────────────
+    # TTC = obs1_dist / speed (speed-invariant).  Penalise non-noop when
+    # the obstacle is far so the model doesn't spam jump/duck all the time.
+    "idle_ttc_threshold":  0.60,
+    "idle_action_penalty":  8.0,
+    "approach_ttc_far":    0.40,    # approach zone: TTC 0.05–0.40
+    "approach_ttc_near":   0.05,    # imminent zone: TTC < 0.05
+
+    # ── Approach-zone action shaping (Phase 1: directional, not accuracy) ────
+    "wrong_duck_penalty":   30.0,   # duck near cactus → likely death
+    "jump_approach_bonus":  15.0,   # jump near cactus → reward direction
+    "wrong_jump_penalty":   10.0,   # jump near bird   → usually bad
+    "airborne_jump_penalty": 20.0,  # double-jump spam → wasteful
+
+    # ── Phase 2 additions (not active yet) ───────────────────────────────────
+    # Uncomment and load from Phase 1 checkpoint when best score ≥ 1000:
     #
-    # TTC zones (obs[12], already in [0,1] with clip=2):
-    #   idle     : TTC > idle_ttc           obstacle far/off-screen → stand still
-    #   approach : approach_ttc_near < TTC < approach_ttc_far  → teach correct action
-    #   imminent : TTC < approach_ttc_near  → death/clearing reward takes over
-    "idle_ttc_threshold":   0.60,      # TTC above this → penalise non-noop
-    "idle_action_penalty":   8.0,      # per-step penalty for jump/duck while idle
-    "approach_ttc_far":     0.40,      # enter approach zone at this TTC
-    "approach_ttc_near":    0.05,      # leave approach zone (imminent) at this TTC
-    "wrong_duck_penalty":   30.0,      # duck near cactus (b1=0) → subtract this
-    "wrong_jump_penalty":   10.0,      # jump near bird  (b1=1) → subtract this
-    # Jump accuracy shaping — rewards outcome, not just the action:
-    #   jump_clear_bonus  : fires on the CLEARING step if dino was airborne (good jump)
-    #   jump_outer_penalty: fires when jumping too early in approach zone (TTC > jump sweet spot)
-    #   approach_ttc_jump_max: upper bound of sweet-spot window; above this → too early penalty
-    "jump_sweet_bonus":         10.0,  # directional nudge: jump in sweet spot (TTC≤jump_max) near cactus
-    "jump_clear_bonus":         30.0,  # outcome bonus: fires on clearing step if dino was airborne
-    "jump_outer_penalty":       10.0,  # too early: jumping in outer approach zone (TTC 0.25-0.40) near cactus
-    "approach_ttc_jump_max":    0.25,  # upper bound of sweet spot — TTC 0.05-0.25 = good timing window
-    # Low-bird duck shaping (symmetric to jump shaping for cacti):
-    #   LOW bird = PTERODACTYL with y1_norm > 0.95 (y≈160/150=1.067, must duck to survive)
-    #   MID/HIGH birds = y1_norm ≤ 0.95 — noop clears them; duck/noop both fine
-    "duck_approach_bonus":        20.0,  # duck near LOW bird (b1=1, y1>0.95) → add this
-    "wrong_noop_low_bird_penalty": 25.0, # noop near LOW bird → subtract this
-    # Airborne spam: reduced from 60 — 60 suppressed all jump exploration in early training
-    "airborne_jump_penalty":    30.0,  # painful but not fatal; 60 was too heavy for exploration phase
-    # Landing danger: reduced from 35 — secondary learning signal, not primary
-    "landing_danger_ttc":       0.15,  # obstacle TTC threshold that triggers landing penalty
-    "landing_danger_penalty":   15.0,  # learning signal for jumped-too-early (was 35, too heavy)
+    # Jump accuracy:
+    #   "jump_sweet_bonus":          10.0,
+    #   "jump_clear_bonus":          30.0,
+    #   "jump_outer_penalty":        10.0,
+    #   "approach_ttc_jump_max":     0.25,
+    #   "airborne_jump_penalty":     30.0,  # raise from 20
+    #   "landing_danger_ttc":        0.15,
+    #   "landing_danger_penalty":    15.0,
+    #
+    # Duck / bird shaping:
+    #   "duck_approach_bonus":        20.0,
+    #   "wrong_noop_low_bird_penalty": 25.0,
 }
 
 GAME_CONFIG = {
