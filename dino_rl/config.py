@@ -27,11 +27,11 @@ GENETIC_CONFIG = {
 # Completion: 20-ep avg ≥ 200, clearing rate ≥ 0.5/ep  →  save checkpoint
 #             then move to Phase 1B (add airborne penalty only)
 DQN_CONFIG = {
-    "lr": 1e-4,
+    "lr": 5e-5,                     # was 1e-4 — halved to reduce oscillation from large reward scale
     "gamma": 0.99,
     "epsilon_start": 1.0,
-    "epsilon_end": 0.15,            # stay exploratory longer — don't greedify too early
-    "epsilon_decay": 0.990,         # slower decay: ~0.15 by ep ~180, gives more exploration time
+    "epsilon_end": 0.05,            # lower floor — 15% random was injecting too much noise into converged policy
+    "epsilon_decay": 0.990,         # reaches ~0.05 by ep ~340
     "batch_size": 128,
     "buffer_size": 20_000,
     "target_update_freq": 2000,     # was 1500 — reduce instability after model finds decent policy
