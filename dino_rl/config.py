@@ -25,14 +25,14 @@ GENETIC_CONFIG = {
 # death signal.  Once best score is consistently 1000+, load this checkpoint
 # and switch to Phase 2 config (accuracy + duck shaping).
 DQN_CONFIG = {
-    "lr": 5e-4,
+    "lr": 1e-4,                      # was 5e-4 — halved to stabilise oscillating loss
     "gamma": 0.99,
     "epsilon_start": 1.0,
     "epsilon_end": 0.02,
     "epsilon_decay": 0.993,         # reaches ~0.02 by ep ~550
     "batch_size": 128,
-    "buffer_size": 50_000,
-    "target_update_freq": 500,
+    "buffer_size": 20_000,          # was 50k — smaller so old random experiences age out faster
+    "target_update_freq": 1500,     # was 500 — give targets more time to stabilise before chasing them
     "network_layers": [13, 128, 64, 3],
     "max_steps_per_episode": 20_000,
     "poll_interval": 0.025,
