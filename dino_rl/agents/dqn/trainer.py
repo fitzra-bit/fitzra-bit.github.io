@@ -92,44 +92,62 @@ class DQNTrainer:
         """Return (shaped_reward, category_label) for action-type shaping.
 
         Category labels match the dashboard's reward breakdown keys:
-            airborne | idle | wrong_duck | jump_bonus | wrong_jump | none
+            airborne | idle | wrong_duck | jump_bonus | wrong_jump | duck_bonus | wrong_noop_bird | none
 
         Feature indices used:
             obs[ 0] = obs1 distance (normalised)
-            obs[ 3] = obs1 is_bird flag
+            obs[ 1] = obs1 y-position (normalised): LOW bird≈1.07, MID≈0.87, HIGH≈0.60, cacti≈1.1–1.2
+            obs[ 3] = obs1 is_bird flag (0/1)
             obs[10] = dino_jumping (0/1)
             obs[12] = time-to-collision (pre-computed, [0,1])
+
+        Bird type identification via obs[1]:
+            y1_norm > 0.95  →  LOW  bird (y≈160) — dino MUST duck or it crashes
+            y1_norm ≤ 0.95  →  MID/HIGH bird     — noop or duck both survive
         """
         # 1. Airborne jump spam — highest priority
         if action == 1 and float(obs[10]) > 0.5:
             return -self.cfg.get("airborne_jump_penalty", 20.0), "airborne"
 
-        if action == 0:
-            return 0.0, "none"
-
         ttc       = float(obs[12])
         obs1_bird = float(obs[3]) > 0.5
+        # LOW bird: y≈160/150=1.067; MID: 0.867; HIGH: 0.600
+        is_low_bird = obs1_bird and float(obs[1]) > 0.95
 
         idle_ttc      = self.cfg.get("idle_ttc_threshold", 0.60)
         approach_far  = self.cfg.get("approach_ttc_far",   0.40)
         approach_near = self.cfg.get("approach_ttc_near",  0.05)
 
-        # 2. Idle — obstacle far relative to speed
+        # 2. Idle — obstacle far relative to speed; noop is free, action wastes input
         if ttc > idle_ttc:
+            if action == 0:
+                return 0.0, "none"
             return -self.cfg.get("idle_action_penalty", 8.0), "idle"
 
         # 3. Approach — teach correct action per obstacle type
         if approach_near < ttc < approach_far:
             if not obs1_bird:
+                # ── Cactus: should jump ──────────────────────────────────────
+                if action == 0:
+                    return 0.0, "none"
                 if action == 2:
                     return -self.cfg.get("wrong_duck_penalty",  30.0), "wrong_duck"
                 if action == 1:
                     return  self.cfg.get("jump_approach_bonus", 15.0), "jump_bonus"
             else:
+                # ── Bird: jump is always wrong ────────────────────────────────
                 if action == 1:
                     return -self.cfg.get("wrong_jump_penalty", 10.0), "wrong_jump"
+                if is_low_bird:
+                    # LOW bird — must duck; noop causes crash
+                    if action == 2:
+                        return  self.cfg.get("duck_approach_bonus",        20.0), "duck_bonus"
+                    # action == 0 (noop) near LOW bird is as bad as wrong_duck near cactus
+                    return -self.cfg.get("wrong_noop_low_bird_penalty", 25.0), "wrong_noop_bird"
+                # MID/HIGH bird — noop or duck both survive; no penalty/bonus
+                return 0.0, "none"
 
-        # 4. Imminent — no extra shaping
+        # 4. Imminent zone — death or clearing bonus takes over; no extra shaping
         return 0.0, "none"
 
     def _action_type_reward(self, obs: np.ndarray, action: int) -> float:
@@ -199,16 +217,20 @@ class DQNTrainer:
                 prev_obs1_dist = obs[0]
 
                 # Per-episode accumulators
-                ep_score       = 0.0
-                ep_steps       = 0
-                ep_loss_sum    = 0.0
-                ep_loss_n      = 0
-                ep_cleared     = 0
-                ep_actions     = {0: 0, 1: 0, 2: 0}
+                ep_score          = 0.0
+                ep_steps          = 0
+                ep_loss_sum       = 0.0
+                ep_loss_n         = 0
+                ep_cleared        = 0
+                ep_bird_clears    = 0
+                ep_bird_seen      = False   # flips True the moment a bird enters range
+                ep_actions        = {0: 0, 1: 0, 2: 0}
                 ep_shaped: dict[str, float] = {
-                    "survival": 0.0, "clearing": 0.0, "jump_bonus": 0.0,
-                    "idle": 0.0, "airborne": 0.0, "wrong_duck": 0.0,
-                    "wrong_jump": 0.0, "death": 0.0,
+                    "survival": 0.0, "clearing": 0.0,
+                    "jump_bonus": 0.0, "duck_bonus": 0.0,
+                    "idle": 0.0, "airborne": 0.0,
+                    "wrong_duck": 0.0, "wrong_jump": 0.0, "wrong_noop_bird": 0.0,
+                    "death": 0.0,
                 }
                 last_q_vals    = [0.0, 0.0, 0.0]
                 last_obs       = obs.tolist()
@@ -229,6 +251,20 @@ class DQNTrainer:
                     next_obs      = next_state.to_array()
                     curr_obs1_dist = next_obs[0]
 
+                    # Bird detection — obs[3] = is_bird flag, obs[0] = distance
+                    obs1_is_bird = float(obs[3]) > 0.5
+                    if obs1_is_bird and obs[0] < 0.9 and not ep_bird_seen:
+                        ep_bird_seen = True   # first time this bird enters the frame
+                        # obs[1] = y1_norm: low ~1.07, mid ~0.87, high ~0.60
+                        y1 = float(obs[1])
+                        if y1 > 0.95:
+                            bird_type = "LOW  (duck!)"
+                        elif y1 > 0.75:
+                            bird_type = "MID  (noop)"
+                        else:
+                            bird_type = "HIGH (noop)"
+                        print(f"\r  [Ep {ep:4d}] BIRD SPOTTED  type={bird_type}  y1={y1:.2f}  score={ep_score:.0f}")
+
                     # Base reward components (tracked separately for dashboard)
                     if done:
                         base_reward = self.cfg.get("death_penalty", -100.0)
@@ -242,6 +278,17 @@ class DQNTrainer:
                             ep_shaped["clearing"] += clr
                             base_reward += clr
                             ep_cleared  += 1
+                            if obs1_is_bird:
+                                ep_bird_clears += 1
+                                y1 = float(obs[1])
+                                if y1 > 0.95:
+                                    bird_type = "LOW"
+                                elif y1 > 0.75:
+                                    bird_type = "MID"
+                                else:
+                                    bird_type = "HIGH"
+                                print(f"\r  [Ep {ep:4d}] BIRD CLEARED  type={bird_type}  score={ep_score:.0f}  total_bird_clears={ep_bird_clears}")
+                                ep_bird_seen = False   # reset so next bird also gets logged
 
                     # Action-type shaping
                     shaped, label = self._classify_action(obs, action)
@@ -292,6 +339,7 @@ class DQNTrainer:
                     "buffer":       len(self.buffer),
                     "loss":         round(self._last_loss, 4),
                     "cleared":      ep_cleared,
+                    "bird_clears":  ep_bird_clears,
                     # Extended stats (web dashboard)
                     "total_steps":  self.total_steps,
                     "action_pct": {

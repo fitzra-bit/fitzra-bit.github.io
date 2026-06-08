@@ -48,6 +48,11 @@ DQN_CONFIG = {
     "wrong_duck_penalty":   30.0,      # duck near cactus (b1=0) → subtract this
     "jump_approach_bonus":  15.0,      # jump near cactus (b1=0) → add this
     "wrong_jump_penalty":   10.0,      # jump near bird  (b1=1) → subtract this
+    # Low-bird duck shaping (symmetric to jump shaping for cacti):
+    #   LOW bird = PTERODACTYL with y1_norm > 0.95 (y≈160/150=1.067, must duck to survive)
+    #   MID/HIGH birds = y1_norm ≤ 0.95 — noop clears them; duck/noop both fine
+    "duck_approach_bonus":        20.0,  # duck near LOW bird (b1=1, y1>0.95) → add this
+    "wrong_noop_low_bird_penalty": 25.0, # noop near LOW bird → subtract this
     # Airborne spam: jumping while already airborne is wasted input
     "airborne_jump_penalty": 20.0,     # action=jump + dino_jumping=1 → subtract this
 }
