@@ -34,7 +34,7 @@ DQN_CONFIG = {
     "epsilon_decay": 0.990,         # slower decay: ~0.15 by ep ~180, gives more exploration time
     "batch_size": 128,
     "buffer_size": 20_000,
-    "target_update_freq": 1500,
+    "target_update_freq": 2000,     # was 1500 — reduce instability after model finds decent policy
     "network_layers": [13, 128, 64, 3],
     "max_steps_per_episode": 20_000,
     "poll_interval": 0.025,
@@ -42,7 +42,7 @@ DQN_CONFIG = {
     # ── Core rewards (the only active signals in Phase 1A) ───────────────────
     "death_penalty":          -100.0,
     "survival_reward_scale":     0.1,
-    "clearing_bonus":           50.0,
+    "clearing_bonus":          150.0,  # was 50 — needs to exceed death cost so 1 clear = net positive
     "clearing_close_threshold":  0.25,
     "clearing_far_threshold":    0.55,
 
