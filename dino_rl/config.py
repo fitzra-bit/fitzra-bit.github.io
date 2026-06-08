@@ -46,15 +46,24 @@ DQN_CONFIG = {
     "approach_ttc_far":     0.40,      # enter approach zone at this TTC
     "approach_ttc_near":    0.05,      # leave approach zone (imminent) at this TTC
     "wrong_duck_penalty":   30.0,      # duck near cactus (b1=0) → subtract this
-    "jump_approach_bonus":  15.0,      # jump near cactus (b1=0) → add this
     "wrong_jump_penalty":   10.0,      # jump near bird  (b1=1) → subtract this
+    # Jump accuracy shaping — rewards outcome, not just the action:
+    #   jump_clear_bonus  : fires on the CLEARING step if dino was airborne (good jump)
+    #   jump_outer_penalty: fires when jumping too early in approach zone (TTC > jump sweet spot)
+    #   approach_ttc_jump_max: upper bound of sweet-spot window; above this → too early penalty
+    "jump_clear_bonus":         30.0,  # clearing bonus supplement when jump worked (outcome-based)
+    "jump_outer_penalty":       10.0,  # jumped in outer approach zone (too early near cactus)
+    "approach_ttc_jump_max":    0.25,  # sweet-spot upper bound — TTC 0.05-0.25 = good timing
     # Low-bird duck shaping (symmetric to jump shaping for cacti):
     #   LOW bird = PTERODACTYL with y1_norm > 0.95 (y≈160/150=1.067, must duck to survive)
     #   MID/HIGH birds = y1_norm ≤ 0.95 — noop clears them; duck/noop both fine
     "duck_approach_bonus":        20.0,  # duck near LOW bird (b1=1, y1>0.95) → add this
     "wrong_noop_low_bird_penalty": 25.0, # noop near LOW bird → subtract this
-    # Airborne spam: jumping while already airborne is wasted input
-    "airborne_jump_penalty": 20.0,     # action=jump + dino_jumping=1 → subtract this
+    # Airborne spam: near-death cost — spamming jump while airborne wastes the arc
+    "airborne_jump_penalty": 60.0,     # was 20; raised to near-death to kill phantom jumps
+    # Landing danger: just landed AND an obstacle is already imminent (jumped too early)
+    "landing_danger_ttc":     0.15,    # obstacle TTC threshold that triggers landing penalty
+    "landing_danger_penalty": 35.0,    # penalty for unsafe landing (setup-for-death)
 }
 
 GAME_CONFIG = {

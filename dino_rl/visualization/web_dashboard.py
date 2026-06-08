@@ -198,16 +198,18 @@ body{background:#0d1117;color:#e6edf3;font-family:'Segoe UI',monospace;font-size
   <div class="panel">
     <h2>Reward Breakdown — latest episode</h2>
     <div id="rw-list">
-      <div class="rw-row"><span class="rw-lbl">Survival reward</span>          <span class="pos" id="R-surv">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Obstacle cleared  (+50)</span>  <span class="pos" id="R-clr">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Jump approach  (+15)</span>      <span class="pos" id="R-jb">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Duck LOW bird  (+20)</span>      <span class="pos" id="R-dckb">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Idle action  (−8/step)</span>   <span class="neg" id="R-idle">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Airborne spam  (−20)</span>      <span class="neg" id="R-airb">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Wrong duck  (−30)</span>         <span class="neg" id="R-wdck">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Wrong jump  (−10)</span>         <span class="neg" id="R-wjmp">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Noop LOW bird  (−25)</span>      <span class="neg" id="R-wnob">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Death penalty  (−100)</span>     <span class="neg" id="R-dth">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Survival reward</span>               <span class="pos" id="R-surv">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Obstacle cleared  (+50)</span>       <span class="pos" id="R-clr">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Jump clear  (+30 outcome)</span>     <span class="pos" id="R-jcl">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Duck LOW bird  (+20)</span>           <span class="pos" id="R-dckb">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Idle action  (−8/step)</span>        <span class="neg" id="R-idle">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Airborne spam  (−60)</span>          <span class="neg" id="R-airb">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Jump too early  (−10)</span>         <span class="neg" id="R-jout">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Landing danger  (−35)</span>         <span class="neg" id="R-land">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Wrong duck  (−30)</span>             <span class="neg" id="R-wdck">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Wrong jump  (−10)</span>             <span class="neg" id="R-wjmp">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Noop LOW bird  (−25)</span>          <span class="neg" id="R-wnob">—</span></div>
+      <div class="rw-row"><span class="rw-lbl">Death penalty  (−100)</span>         <span class="neg" id="R-dth">—</span></div>
     </div>
   </div>
 
@@ -404,10 +406,12 @@ function render(data) {
   const sr = c.shaped_rewards || {};
   document.getElementById('R-surv').textContent = fmt1(sr.survival||0);
   document.getElementById('R-clr').textContent  = fmt1(sr.clearing||0);
-  document.getElementById('R-jb').textContent   = fmt1(sr.jump_bonus||0);
+  document.getElementById('R-jcl').textContent  = fmt1(sr.jump_clear||0);
   document.getElementById('R-dckb').textContent = fmt1(sr.duck_bonus||0);
   document.getElementById('R-idle').textContent = fmt1(sr.idle||0);
   document.getElementById('R-airb').textContent = fmt1(sr.airborne||0);
+  document.getElementById('R-jout').textContent = fmt1(sr.jump_outer||0);
+  document.getElementById('R-land').textContent = fmt1(sr.landing_danger||0);
   document.getElementById('R-wdck').textContent = fmt1(sr.wrong_duck||0);
   document.getElementById('R-wjmp').textContent = fmt1(sr.wrong_jump||0);
   document.getElementById('R-wnob').textContent = fmt1(sr.wrong_noop_bird||0);
