@@ -54,7 +54,7 @@ DQN_CONFIG = {
 
     # ── Approach-zone action shaping (Phase 1: directional, not accuracy) ────
     "wrong_duck_penalty":   30.0,   # duck near cactus → likely death
-    "jump_approach_bonus":  15.0,   # jump near cactus → reward direction
+    "jump_approach_bonus":  30.0,   # raised from 15 — needs ~28+ to make Q(jump)>Q(noop) at current success rate
     "wrong_jump_penalty":   10.0,   # jump near bird   → usually bad
     "airborne_jump_penalty": 20.0,  # double-jump spam → wasteful
 
