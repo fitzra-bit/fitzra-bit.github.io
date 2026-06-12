@@ -1,8 +1,13 @@
-"""DQN training loop — Double DQN with shaped rewards."""
+"""DQN training loop — Double DQN with shaped rewards and curriculum support.
+
+With a Curriculum attached the loop is fully self-driving:
+  * phase completion  → checkpoint, apply next phase, navigate game, continue
+  * stall             → automatic escalating interventions (logged)
+  * every episode     → state.json updated, so --auto can resume mid-phase
+"""
 
 import random
 import time
-from collections import deque
 from typing import TYPE_CHECKING, Callable, Optional
 
 import numpy as np
@@ -16,6 +21,7 @@ from config import DQN_CONFIG, GAME_CONFIG
 from game.chrome_driver import DinoDriver
 
 if TYPE_CHECKING:
+    from curriculum import Curriculum
     from logger import RunLogger
 
 
@@ -28,12 +34,16 @@ class DQNTrainer:
         logger: Optional["RunLogger"] = None,
         checkpoint_every: int = 100,
         load_path: Optional[str] = None,
+        curriculum: Optional["Curriculum"] = None,
+        start_episode: int = 0,
     ):
         self.episodes = episodes
         self.on_episode_end = on_episode_end
-        self.cfg = cfg
+        self.cfg = dict(cfg)              # copy — curriculum mutates per phase
         self.logger = logger
         self.checkpoint_every = checkpoint_every
+        self.curriculum = curriculum
+        self.start_episode = start_episode
 
         self.online, self.target = build_networks(cfg["network_layers"])
         self.optimizer = optim.Adam(self.online.parameters(), lr=cfg["lr"])
@@ -44,14 +54,14 @@ class DQNTrainer:
         self._last_loss: float = 0.0
 
         if load_path:
-            from logger import load_model
-            load_model(self.online, load_path)
-            self.target.load_state_dict(self.online.state_dict())
-            print(f"Loaded weights from {load_path}")
+            from logger import load_full_checkpoint
+            full = load_full_checkpoint(self, load_path)
+            kind = "full checkpoint" if full else "weights"
+            print(f"Loaded {kind} from {load_path}")
 
-    # ------------------------------------------------------------------
+    # ──────────────────────────────────────────────────────────────────
     # Action selection
-    # ------------------------------------------------------------------
+    # ──────────────────────────────────────────────────────────────────
 
     def _choose_action(self, state: np.ndarray) -> int:
         if random.random() < self.epsilon:
@@ -59,80 +69,53 @@ class DQNTrainer:
         return self.online.predict(state)
 
     def _q_values(self, obs: np.ndarray) -> list[float]:
-        """Return raw Q-values for all 3 actions without gradient."""
         with torch.no_grad():
             t = torch.from_numpy(obs).unsqueeze(0)
             return self.online(t).squeeze(0).tolist()
 
-    # ------------------------------------------------------------------
+    # ──────────────────────────────────────────────────────────────────
     # Reward shaping
-    # ------------------------------------------------------------------
-
-    def _reward(
-        self,
-        prev_score: float,
-        next_score: float,
-        done: bool,
-        prev_obs1_dist: float,
-        curr_obs1_dist: float,
-    ) -> float:
-        """Shaped reward: score-delta survival + obstacle-clearing bonus + death penalty."""
-        if done:
-            return self.cfg.get("death_penalty", -100.0)
-
-        reward = (next_score - prev_score) * self.cfg.get("survival_reward_scale", 0.1)
-
-        close = self.cfg.get("clearing_close_threshold", 0.25)
-        far   = self.cfg.get("clearing_far_threshold", 0.55)
-        if prev_obs1_dist < close and curr_obs1_dist > far:
-            reward += self.cfg.get("clearing_bonus", 50.0)
-
-        return reward
+    # ──────────────────────────────────────────────────────────────────
 
     def _classify_action(self, obs: np.ndarray, action: int) -> tuple[float, str]:
         """Return (shaped_reward, category_label) for action-type shaping.
 
-        Phase 1B — directional nudge only, no idle punishment.
-        Two signals added on top of Phase 1A outcomes:
+        Active signals depend on phase (curriculum merges overrides into cfg):
 
-          1. airborne_jump_penalty: small penalty for double-jumping while
-             already airborne.  Safe to add now that the model knows jumping
-             is sometimes good.  Prevents wasting the jump mid-arc.
+          airborne_jump_penalty — double-jump while airborne (all phases)
+          jump_approach_bonus   — jump inside the approach TTC window, cactus
+                                  ahead (all phases; window tightens in ph. 2)
+          idle_action_penalty   — non-noop while nothing is near (phase 2+;
+                                  poison during early exploration, mild and
+                                  safe once jump timing exists)
 
-          2. jump_approach_bonus: small reward for jumping while in the
-             approach zone (TTC between approach_near and approach_far).
-             Gives a constant directional label — "jump near obstacle = good"
-             — so the model can maintain the association across variance.
-             NO idle penalty: that was the poison in prior configs.
-
-        Feature indices used:
+        Feature indices:
             obs[ 3] = obs1 is_bird flag (0/1)
             obs[10] = dino_jumping (0/1)
             obs[12] = time-to-collision (pre-computed, [0,1])
         """
-        # 1. Airborne double-jump — small penalty, safe at this stage
         if action == 1 and float(obs[10]) > 0.5:
             return -self.cfg.get("airborne_jump_penalty", 5.0), "airborne"
 
-        ttc          = float(obs[12])
-        obs1_bird    = float(obs[3]) > 0.5
-        approach_far = self.cfg.get("approach_ttc_far",  0.35)
-        approach_near= self.cfg.get("approach_ttc_near", 0.05)
+        ttc           = float(obs[12])
+        obs1_bird     = float(obs[3]) > 0.5
+        approach_far  = self.cfg.get("approach_ttc_far", 0.35)
+        approach_near = self.cfg.get("approach_ttc_near", 0.05)
 
-        # 2. Approach zone: nudge jump near cactus, no other shaping
         if approach_near < ttc < approach_far and not obs1_bird:
             if action == 1:
                 return self.cfg.get("jump_approach_bonus", 10.0), "jump_bonus"
 
+        # Phase 2+: mild penalty for acting when nothing is close
+        idle_pen = self.cfg.get("idle_action_penalty", 0.0)
+        if idle_pen and action != 0 and ttc > self.cfg.get("idle_ttc_threshold", 0.60):
+            return -idle_pen, "idle"
+
         return 0.0, "none"
 
-    def _action_type_reward(self, obs: np.ndarray, action: int) -> float:
-        reward, _ = self._classify_action(obs, action)
-        return reward
-
-    # ------------------------------------------------------------------
+    # ──────────────────────────────────────────────────────────────────
     # Network update — Double DQN
-    # ------------------------------------------------------------------
+    # ──────────────────────────────────────────────────────────────────
 
     def _update(self) -> Optional[float]:
         if len(self.buffer) < self.cfg["batch_size"]:
@@ -150,7 +133,6 @@ class DQNTrainer:
         q_vals = self.online(s).gather(1, a.unsqueeze(1)).squeeze(1)
 
         with torch.no_grad():
-            # Double DQN: online net selects action, target net evaluates it.
             best_actions = self.online(ns).argmax(dim=1, keepdim=True)
             next_q = self.target(ns).gather(1, best_actions).squeeze(1)
             target_q = r + self.cfg["gamma"] * next_q * (1 - d)
@@ -168,24 +150,78 @@ class DQNTrainer:
             self.epsilon * self.cfg["epsilon_decay"],
         )
 
-    # ------------------------------------------------------------------
+    # ──────────────────────────────────────────────────────────────────
+    # Curriculum events
+    # ──────────────────────────────────────────────────────────────────
+
+    def _apply_phase(self, driver: DinoDriver):
+        """Merge the current phase's overrides into cfg and load its game URL."""
+        cur = self.curriculum
+        if cur is None or cur.finished:
+            return
+        ph = cur.phase
+        self.cfg.update(ph.reward_overrides)
+        if cur.episodes_in_phase == 0:
+            self.epsilon = ph.epsilon_start   # fresh phase entry
+        # else: resuming mid-phase — keep the epsilon restored from state.json
+        driver.load_url(cur.game_url(GAME_CONFIG["game_url"]))
+        print(f"\n──  PHASE {cur.phase_idx + 1}/{len(cur.phases)}: {ph.name}  ──")
+        print(f"    {ph.description}")
+        print(f"    target avg{ph.complete_window}: {ph.complete_avg:.0f}   ε: {self.epsilon:.2f}\n")
+
+    def _handle_curriculum_event(self, event: dict, driver: DinoDriver):
+        cur = self.curriculum
+        bar = "═" * 70
+
+        if event["type"] == "advance":
+            print(f"\n{bar}")
+            print(f"  ✔  PHASE '{event['completed']}' COMPLETE — avg: {event['avg']:.0f}")
+            if self.logger:
+                self.logger.save_model(self.online, f"phase_{event['completed']}_complete")
+            if cur.finished:
+                print("  ✔  CURRICULUM COMPLETE — continuing to convergence.")
+                print(bar + "\n")
+            else:
+                print(f"  →  advancing to '{event['next']}' automatically")
+                print(bar + "\n")
+                self._apply_phase(driver)
+
+        elif event["type"] == "intervene":
+            if event["level"] == 1:
+                self.epsilon = max(self.epsilon, 0.30)
+                print(f"\n  ⚠  STALL (avg {event['avg']:.0f}) — intervention 1: "
+                      f"epsilon boost → {self.epsilon:.2f}\n")
+            else:
+                if self.logger and (self.logger.run_dir / "phase_best.pt").exists():
+                    from logger import load_model
+                    load_model(self.online, str(self.logger.run_dir / "phase_best.pt"))
+                    self.target.load_state_dict(self.online.state_dict())
+                self.epsilon = max(self.epsilon, 0.30)
+                print(f"\n  ⚠  STALL (avg {event['avg']:.0f}) — intervention 2: "
+                      f"reverted to phase-best weights, ε → {self.epsilon:.2f}\n")
+
+        elif event["type"] == "stalled":
+            print(f"\n  ✖  PHASE '{cur.phase.name}' STALLED (avg {event['avg']:.0f}). "
+                  f"Auto-interventions exhausted — training continues, but this "
+                  f"phase likely needs a reward/threshold change.\n")
+
+    # ──────────────────────────────────────────────────────────────────
     # Training loop
-    # ------------------------------------------------------------------
+    # ──────────────────────────────────────────────────────────────────
 
     def train(self, driver: DinoDriver) -> QNetwork:
-        poll = self.cfg["poll_interval"]
-
-        # Clearing threshold constants (used inside episode loop)
+        poll      = self.cfg["poll_interval"]
         clr_close = self.cfg.get("clearing_close_threshold", 0.25)
         clr_far   = self.cfg.get("clearing_far_threshold",   0.55)
 
-        # Phase 1 completion detector — fires once when 20-ep rolling avg ≥ 1000
-        _phase1_window   = deque(maxlen=20)
-        _phase1_complete = False
-        _phase1_threshold = self.cfg.get("phase1_score_threshold", 1000.0)
+        # Enter the current curriculum phase (fresh start or resume).
+        if self.curriculum is not None and not self.curriculum.finished:
+            self._apply_phase(driver)
+
+        prev_best_avg = self.curriculum.best_avg_in_phase if self.curriculum else 0.0
 
         try:
-            for ep in range(self.episodes):
+            for ep in range(self.start_episode, self.start_episode + self.episodes):
                 driver.reset()
                 time.sleep(0.2)
 
@@ -197,25 +233,19 @@ class DQNTrainer:
                 prev_score     = state.score
                 prev_obs1_dist = obs[0]
 
-                # Per-episode accumulators
-                ep_score          = 0.0
-                ep_steps          = 0
-                ep_loss_sum       = 0.0
-                ep_loss_n         = 0
-                ep_cleared        = 0
-                ep_bird_clears    = 0
-                ep_bird_seen      = False   # flips True the moment a bird enters range
-                ep_actions        = {0: 0, 1: 0, 2: 0}
+                ep_score, ep_steps = 0.0, 0
+                ep_loss_sum, ep_loss_n = 0.0, 0
+                ep_cleared, ep_bird_clears = 0, 0
+                ep_bird_seen = False
+                ep_actions = {0: 0, 1: 0, 2: 0}
                 ep_shaped: dict[str, float] = {
-                    "survival": 0.0, "clearing": 0.0,
-                    "jump_bonus": 0.0,
+                    "survival": 0.0, "clearing": 0.0, "jump_bonus": 0.0,
                     "idle": 0.0, "airborne": 0.0,
-                    "wrong_duck": 0.0, "wrong_jump": 0.0,
-                    "death": 0.0,
+                    "wrong_duck": 0.0, "wrong_jump": 0.0, "death": 0.0,
                 }
-                last_q_vals    = [0.0, 0.0, 0.0]
-                last_obs       = obs.tolist()
-                last_speed     = float(obs[7])   # normalised speed (feature 7)
+                last_q_vals = [0.0, 0.0, 0.0]
+                last_obs    = obs.tolist()
+                last_speed  = float(obs[7])
 
                 for _ in range(self.cfg["max_steps_per_episode"]):
                     action = self._choose_action(obs)
@@ -232,12 +262,10 @@ class DQNTrainer:
                     next_obs       = next_state.to_array()
                     curr_obs1_dist = next_obs[0]
 
-                    # Bird detection (tracked for stats; no console spam)
                     obs1_is_bird = float(obs[3]) > 0.5
                     if obs1_is_bird and obs[0] < 0.9 and not ep_bird_seen:
                         ep_bird_seen = True
 
-                    # Base reward
                     if done:
                         base_reward = self.cfg.get("death_penalty", -100.0)
                         ep_shaped["death"] += base_reward
@@ -255,14 +283,11 @@ class DQNTrainer:
                                 ep_bird_clears += 1
                                 ep_bird_seen = False
 
-                    # Action-type shaping
                     shaped, label = self._classify_action(obs, action)
                     if label != "none":
                         ep_shaped[label] += shaped
 
-                    total_reward = base_reward + shaped
-
-                    self.buffer.push(obs, action, total_reward, next_obs, float(done))
+                    self.buffer.push(obs, action, base_reward + shaped, next_obs, float(done))
                     loss = self._update()
                     if loss is not None:
                         ep_loss_sum += loss
@@ -271,7 +296,6 @@ class DQNTrainer:
                     if self.total_steps % self.cfg["target_update_freq"] == 0:
                         self.target.load_state_dict(self.online.state_dict())
 
-                    # Sample Q-values every 5 steps (cheap forward pass)
                     if ep_steps % 5 == 0:
                         last_q_vals = self._q_values(obs)
 
@@ -293,26 +317,29 @@ class DQNTrainer:
                     self.best_score = ep_score
                 self._last_loss = ep_loss_sum / ep_loss_n if ep_loss_n else 0.0
 
-                # Phase 1 completion check
-                _phase1_window.append(ep_score)
-                if (not _phase1_complete
-                        and len(_phase1_window) == 20
-                        and sum(_phase1_window) / 20 >= _phase1_threshold):
-                    _phase1_complete = True
-                    avg20 = sum(_phase1_window) / 20
-                    print("\n" + "═" * 70)
-                    print(f"  ✔  PHASE 1 COMPLETE  —  20-ep avg: {avg20:.0f}  (threshold: {_phase1_threshold:.0f})")
-                    print(f"     Saving checkpoint → phase1_complete")
-                    if self.logger:
-                        print(f"     Load with:  --load {self.logger.run_dir / 'phase1_complete.pt'}")
-                    print(f"     Then uncomment Phase 2 block in config.py and restart.")
-                    print("═" * 70 + "\n")
-                    if self.logger:
-                        self.logger.save_model(self.online, "phase1_complete")
+                # ── Curriculum bookkeeping ────────────────────────────
+                phase_name, avg_window, phase_status = "", 0.0, "ok"
+                if self.curriculum is not None and not self.curriculum.finished:
+                    event = self.curriculum.after_episode(ep_score)
+                    avg_window = self.curriculum.rolling_avg()
+                    # Save phase-best weights whenever the rolling avg improves
+                    if (self.logger
+                            and self.curriculum.best_avg_in_phase > prev_best_avg
+                            and len(self.curriculum._window) == self.curriculum.phase.complete_window):
+                        self.logger.save_model(self.online, "phase_best")
+                        prev_best_avg = self.curriculum.best_avg_in_phase
+                    if event["type"]:
+                        self._handle_curriculum_event(event, driver)
+                        if event["type"] == "advance":
+                            prev_best_avg = 0.0
+                    if not self.curriculum.finished:
+                        phase_name = self.curriculum.phase.name
+                        phase_status = "stalled" if self.curriculum.stalled else "ok"
+                    else:
+                        phase_name = "done"
 
                 total_actions = sum(ep_actions.values()) or 1
                 stats = {
-                    # Core stats (terminal dashboard + CSV logger)
                     "episode":      ep,
                     "score":        ep_score,
                     "best":         self.best_score,
@@ -322,7 +349,9 @@ class DQNTrainer:
                     "loss":         round(self._last_loss, 4),
                     "cleared":      ep_cleared,
                     "bird_clears":  ep_bird_clears,
-                    # Extended stats (web dashboard)
+                    "phase":        phase_name,
+                    "phase_status": phase_status,
+                    "avg20":        round(avg_window, 1),
                     "total_steps":  self.total_steps,
                     "action_pct": {
                         "noop": round(ep_actions[0] / total_actions * 100, 1),
@@ -343,11 +372,19 @@ class DQNTrainer:
                     if new_best:
                         self.logger.save_model(self.online, "best_model")
                     if (ep + 1) % self.checkpoint_every == 0:
-                        self.logger.save_model(self.online, "checkpoint")
+                        self.logger.save_full_checkpoint(self, "checkpoint")
+                    # Resume state — every episode, cheap JSON write
+                    self.logger.save_state({
+                        "episode": ep + 1,
+                        "epsilon": self.epsilon,
+                        "total_steps": self.total_steps,
+                        "best_score": self.best_score,
+                        "curriculum": self.curriculum.to_dict() if self.curriculum else None,
+                    })
 
         except KeyboardInterrupt:
-            print(f"\nStopped at episode — best score: {self.best_score:.1f}")
+            print(f"\nStopped — best score: {self.best_score:.1f}")
             if self.logger:
-                self.logger.save_model(self.online, "checkpoint")
+                self.logger.save_full_checkpoint(self, "checkpoint")
 
         return self.online

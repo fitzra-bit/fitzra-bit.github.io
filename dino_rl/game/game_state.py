@@ -41,10 +41,11 @@ class GameState:
         Features (13 total):
           0  distance to obstacle 1    (norm, 1.0 = far / none)
           1  y-position of obstacle 1  (norm) ← top edge of sprite, NOT size
-               cacti:  ~1.1–1.2  (sit on ground; lower y = taller cactus)
-               bird lo: ~1.07   (must duck)
-               bird mid:~0.87   (can run under)
-               bird hi: ~0.60   (can run under)
+               (original 600×150 coordinate space, y_norm=150)
+               cactus small: 0.70   cactus large: 0.60
+               bird low:  0.67  (must JUMP — hits standing and ducking)
+               bird mid:  0.50  (must DUCK — hits standing, clears duck)
+               bird high: 0.33  (run under — clears standing)
           2  width of obstacle 1       (norm)
           3  obstacle 1 is bird        (0/1)
           4  distance to obstacle 2    (norm)

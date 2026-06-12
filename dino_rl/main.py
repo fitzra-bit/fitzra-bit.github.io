@@ -1,13 +1,21 @@
 """Entry point.
 
-Usage:
-    python main.py                                                # genetic, 100 generations, 50 agents
-    python main.py --agent dqn --episodes 1000                    # DQN, logs to runs/dqn_<timestamp>/
-    python main.py --agent dqn --load runs/dqn_X/best_model.pt   # resume from checkpoint
-    python main.py --agent genetic --generations 200 --population 30
-    python main.py --agent genetic --workers 4                    # 4 parallel Chrome windows
+The two commands you actually need:
+    python main.py --agent dqn --episodes 5000      # start curriculum training
+    python main.py --agent dqn --auto               # resume after ANY stop
+                                                    # (crash, Ctrl+C, reboot)
+
+The curriculum advances phases, recovers from stalls, and checkpoints
+automatically — see curriculum.py. Progress: http://localhost:8765
+
+Other modes:
+    python main.py                                                # genetic, 100 generations
+    python main.py --agent dqn --no-curriculum                    # flat training, full game
+    python main.py --agent dqn --load runs/dqn_X/best_model.pt    # start from given weights
+    python main.py --agent genetic --workers 4                    # parallel Chrome windows
     python main.py --headless                                     # no browser window (faster)
-    python main.py --demo --load runs/dqn_X/best_model.pt        # watch best model play (no training)
+    python main.py --demo --load runs/dqn_X/best_model.pt         # watch best model (no training)
+    python main.py --cleanup                                      # kill orphaned Chrome processes
 """
 
 import argparse
@@ -74,15 +82,41 @@ def run_genetic(args):
 def run_dqn(args):
     cfg = {**DQN_CONFIG}
 
-    from logger import RunLogger
+    from logger import RunLogger, find_latest_run
     from agents.dqn.trainer import DQNTrainer
+    from curriculum import Curriculum
     from visualization.web_dashboard import DashboardServer
+
+    # ── Resume (--auto): newest run with a state.json picks up mid-phase ──
+    resume_dir, start_episode, load_path = None, 0, args.load
+    curriculum = None if args.no_curriculum else Curriculum()
+
+    if args.auto:
+        latest = find_latest_run()
+        if latest is None:
+            print("No resumable run found — starting fresh.")
+        else:
+            resume_dir = str(latest)
+            checkpoint = latest / "checkpoint.pt"
+            if checkpoint.exists():
+                load_path = str(checkpoint)
 
     web = DashboardServer()
     web.start()   # http://localhost:8765  (daemon thread — auto-stops with process)
 
     driver = DinoDriver(headless=args.headless)
-    with RunLogger(agent="dqn", cfg=cfg) as log:
+    with RunLogger(agent="dqn", cfg=cfg, resume_dir=resume_dir) as log:
+        # Restore curriculum + counters from state.json after logger exists
+        if resume_dir:
+            state = log.load_state()
+            if state:
+                start_episode = state.get("episode", 0)
+                if curriculum is not None and state.get("curriculum"):
+                    curriculum = Curriculum.from_dict(state["curriculum"])
+                    print(f"Resuming at episode {start_episode}, "
+                          f"phase '{curriculum.phase.name if not curriculum.finished else 'done'}' "
+                          f"({curriculum.episodes_in_phase} eps in)")
+
         try:
             with DQNDashboard() as dash:
                 def on_ep_end(stats):
@@ -95,7 +129,9 @@ def run_dqn(args):
                     cfg=cfg,
                     logger=log,
                     checkpoint_every=args.checkpoint,
-                    load_path=args.load,
+                    load_path=load_path,
+                    curriculum=curriculum,
+                    start_episode=start_episode,
                 )
                 trainer.train(driver)
 
@@ -261,6 +297,17 @@ def main():
         default=100,
         metavar="N",
         help="Save a checkpoint every N episodes (default: 100)",
+    )
+    parser.add_argument(
+        "--auto",
+        action="store_true",
+        help="Resume the most recent DQN run (checkpoint + phase + epsilon) "
+             "and continue training. The one command to restart after any stop.",
+    )
+    parser.add_argument(
+        "--no-curriculum",
+        action="store_true",
+        help="DQN: train on the full game with the base config, no phases.",
     )
     parser.add_argument(
         "--demo",

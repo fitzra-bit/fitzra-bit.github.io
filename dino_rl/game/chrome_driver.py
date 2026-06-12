@@ -147,7 +147,15 @@ class DinoDriver:
     # ------------------------------------------------------------------
 
     def _open_game(self):
-        url = GAME_CONFIG["game_url"]
+        self.load_url(GAME_CONFIG["game_url"])
+
+    def load_url(self, url: str):
+        """Navigate to a game URL (e.g. with new curriculum params) and re-init.
+
+        Used for mid-run phase transitions: dino.html reads its settings
+        (birds on/off, speed caps) from URL query params, so changing phase
+        is just a page navigation — no game-file edits, no browser restart.
+        """
         try:
             self.driver.get(url)
         except WebDriverException:

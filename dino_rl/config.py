@@ -5,7 +5,8 @@ GENETIC_CONFIG = {
     "mutation_scale_start": 0.30,
     "mutation_scale_end": 0.05,
     "mutation_scale_decay": 0.92,
-    "fitness_baseline": 30.5,
+    "fitness_baseline": 46.0,   # free score from doing nothing (3s obstacle-free
+                                # intro + idle survival in the original-pace game)
     "stagnation_limit": 8,
     "stagnation_inject_pct": 0.20,
     "spam_rate_threshold": 0.50,
@@ -17,15 +18,15 @@ GENETIC_CONFIG = {
     "parallel_workers": 1,
 }
 
-# ── Phase 1A — Pure outcome learning ─────────────────────────────────────────
-# Goal: model discovers that jumping near obstacles prevents death.
-# NO intermediate penalties — only death and clearing bonus.
-# Penalties during exploration bias Q(jump) negative before the model
-# has any sense of timing, causing it to converge on noop.
-# Add shaping layers in later phases once basic jumping is solid.
-#
-# Completion: 20-ep avg ≥ 200, clearing rate ≥ 0.5/ep  →  save checkpoint
-#             then move to Phase 1B (add airborne penalty only)
+# ── DQN base config = curriculum Phase 1 ─────────────────────────────────────
+# Phase 1 learnings (1A/1B experiments) baked in:
+#   * Pure outcome rewards first — penalties during exploration bias Q(jump)
+#     negative before the model has any timing, converging on noop.
+#   * Then directional nudge only (jump_approach_bonus + airborne penalty).
+#   * Idle penalties arrive in Phase 2 — see curriculum.py for the full
+#     declarative phase plan (thresholds, shaping layers, stall handling).
+# Phase transitions, completion detection, stall recovery, and resume are
+# automatic: python main.py --agent dqn  /  python main.py --agent dqn --auto
 DQN_CONFIG = {
     "lr": 5e-5,                     # was 1e-4 — halved to reduce oscillation from large reward scale
     "gamma": 0.99,
@@ -55,21 +56,8 @@ DQN_CONFIG = {
     "jump_approach_bonus":   10.0,   # +10 for jumping near cactus (not near bird)
     "airborne_jump_penalty":  5.0,   # -5 for double-jump while already airborne
 
-    # ── Phase 1B completion trigger ───────────────────────────────────────────
-    "phase1_score_threshold": 200.0,   # 20-ep avg ≥ 200 → banner + checkpoint
-
-    # ── Phase 2 (add after 1B checkpoint, score ≥ 500) ───────────────────────
-    # Load 1B checkpoint, set epsilon_start: 0.2, then add:
-    #   "jump_approach_bonus":  10.0    # gentle nudge toward obstacle
-    #   "idle_action_penalty":   3.0    # very mild — obstacle far
-    #   "idle_ttc_threshold":    0.60
-    #   "approach_ttc_far":      0.25   # tighter window than before
-    #   "approach_ttc_near":     0.05
-    #
-    # ── Phase 3 (convergence, score ≥ 1000) ──────────────────────────────────
-    # No new signals — run to convergence, epsilon_start: 0.1
-    #
-    # ── Phase 4+ (birds) — see curriculum plan ───────────────────────────────
+    # Phase 2+ shaping (idle penalty, tighter windows) and all completion
+    # thresholds live in curriculum.py — applied automatically per phase.
 }
 
 GAME_CONFIG = {
