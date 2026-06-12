@@ -50,10 +50,65 @@ def _open_drivers(n: int, headless: bool) -> list[DinoDriver]:
 
 
 def run_genetic(args):
+    """Sim-based genetic training (default). Use --browser for the legacy
+    Selenium implementation."""
     cfg = {**GENETIC_CONFIG}
     if args.population:
         cfg["population_size"] = args.population
 
+    if args.browser:
+        return _run_genetic_browser(args, cfg)
+
+    from datetime import datetime
+    from pathlib import Path
+    from agents.genetic.sim_trainer import SimGeneticTrainer
+    from curriculum import Curriculum
+    from visualization.web_dashboard import DashboardServer
+
+    curriculum = None if args.no_curriculum else Curriculum()
+
+    # Resume (--auto): newest genetic run with a state.json
+    run_dir, start_gen = None, 0
+    if args.auto:
+        base = Path("runs")
+        candidates = [d for d in base.glob("genetic_*")
+                      if (d / "state.json").exists()] if base.exists() else []
+        if candidates:
+            run_dir = str(max(candidates, key=lambda d: (d / "state.json").stat().st_mtime))
+            print(f"Resuming: {run_dir}")
+    if run_dir is None:
+        run_dir = f"runs/genetic_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        print(f"Run dir: {run_dir}")
+
+    web = DashboardServer()
+    web.start()
+
+    trainer = SimGeneticTrainer(
+        generations=args.generations,
+        cfg=cfg,
+        curriculum=curriculum,
+        run_dir=run_dir,
+        on_generation_end=lambda s: (
+            print(f"gen {s['generation']:>4} | best {s['score']:>7.1f} | "
+                  f"avg {s['avg_fitness']:>7.1f} | eval {s['eval_avg']:>7.1f} | "
+                  f"phase {s['phase']} | mut {s['mutation_scale']:.3f} | "
+                  f"{s['gen_seconds']:.1f}s/gen"
+                  + (f" | deaths {s['eval_death_causes']}" if s.get('eval_death_causes') else "")),
+            web.push(s),
+        ),
+    )
+    if args.auto:
+        trainer.start_generation = trainer.load_state()
+        if trainer.start_generation:
+            print(f"Resumed at generation {trainer.start_generation}")
+
+    trainer.train()
+    print(f"\nDone. Best champion eval: {trainer.best_eval:.1f}")
+    print(f"Champion genome: {run_dir}/best_genome.npz")
+
+
+def _run_genetic_browser(args, cfg):
+    """Legacy: evolution against the live browser game."""
     n_workers = max(1, min(args.workers, cfg["population_size"]))
     print(f"Opening {n_workers} Chrome window(s) in parallel...")
     drivers = _open_drivers(n_workers, args.headless)
@@ -75,8 +130,7 @@ def run_genetic(args):
             d.close()
 
     if pop is not None:
-        label = "Training complete" if not pop else "Stopped early"
-        print(f"\n{label}. Best score: {pop.best_ever:.1f}")
+        print(f"\nDone. Best score: {pop.best_ever:.1f}")
 
 
 def run_dqn(args):
@@ -142,16 +196,20 @@ def run_demo(args):
     """Watch a saved model play with ε=0 — pure exploitation, visible browser, no training."""
     if not args.load:
         print("Error: --demo requires --load PATH")
-        print("  Example: python main.py --demo --load runs\\dqn_20260606_113028\\best_model.pt")
+        print("  DQN:     python main.py --demo --load runs/dqn_X/best_model.pt")
+        print("  Genetic: python main.py --demo --load runs/genetic_X/best_genome.npz")
         return
 
-    from agents.dqn.network import QNetwork
-    from logger import load_model
-
     cfg = {**DQN_CONFIG}
-    net = QNetwork(cfg["network_layers"])
-    load_model(net, args.load)
-    net.eval()
+    if args.load.endswith(".npz"):
+        from agents.genetic.sim_trainer import load_genome
+        net = load_genome(args.load)            # NumpyNet — same .predict() API
+    else:
+        from agents.dqn.network import QNetwork
+        from logger import load_model
+        net = QNetwork(cfg["network_layers"])
+        load_model(net, args.load)
+        net.eval()
     print(f"Loaded:  {args.load}")
     print("Mode:    demo (ε=0, no training, no buffer)")
     print("Control: Ctrl+C to stop\n")
@@ -179,7 +237,8 @@ def run_demo(args):
             ep_score       = 0.0
             ep_steps       = 0
             ep_cleared     = 0
-            debug_ep       = (ep == 1 and dbg_every > 0)
+            debug_ep       = (ep == 1 and dbg_every > 0
+                              and not args.load.endswith(".npz"))  # torch-only
 
             for _ in range(20_000):
                 # Debug: show what the network sees and decides
@@ -297,7 +356,12 @@ def main():
     parser.add_argument(
         "--no-curriculum",
         action="store_true",
-        help="DQN: train on the full game with the base config, no phases.",
+        help="Train on the full game with the base config, no phases.",
+    )
+    parser.add_argument(
+        "--browser",
+        action="store_true",
+        help="Genetic: use the legacy browser-based evaluation instead of the sim.",
     )
     parser.add_argument(
         "--demo",
