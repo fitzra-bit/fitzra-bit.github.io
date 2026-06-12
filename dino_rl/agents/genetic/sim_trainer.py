@@ -40,14 +40,19 @@ from config import GENETIC_CONFIG
 from game.dino_env import DinoEnv
 
 
-# Fitness episodes are capped so a converged population doesn't take
-# 10 game-minutes per genome; champion eval uses the full cap.
-FITNESS_FRAME_CAP = 7_200      # 2 game-minutes
-EVAL_FRAME_CAP    = 36_000     # 10 game-minutes (same as DQN)
+# Fitness episodes start with a short frame cap so early generations are
+# fast, and the cap DOUBLES whenever the generation champion times out —
+# i.e. the measuring stick grows exactly when the population outgrows it.
+# (A fixed cap silently saturates fitness: once several genomes survive
+# the whole window, selection can't tell them apart and evolution random-
+# walks. We hit exactly this — best fitness pinned at the cap score of
+# ~1,727 for 60+ generations while real skill differences lived beyond it.)
+FITNESS_FRAME_CAP_START = 7_200    # 2 game-minutes
+EVAL_FRAME_CAP          = 36_000   # 10 game-minutes (same as DQN)
 
 
-def run_sim_episode(env: DinoEnv, net: NumpyNet, seed: int) -> tuple[float, dict]:
-    """One episode; returns (score, action_counts)."""
+def run_sim_episode(env: DinoEnv, net: NumpyNet, seed: int) -> tuple[float, dict, bool]:
+    """One episode; returns (score, action_counts, timed_out)."""
     obs = env.reset(seed=seed)
     counts = {0: 0, 1: 0, 2: 0}
     done = False
@@ -55,7 +60,7 @@ def run_sim_episode(env: DinoEnv, net: NumpyNet, seed: int) -> tuple[float, dict
         a = net.predict(obs)
         counts[a] += 1
         obs, _, done, info = env.step(a)
-    return info["score"], counts
+    return info["score"], counts, info["timeout"]
 
 
 class SimGeneticTrainer:
@@ -87,6 +92,7 @@ class SimGeneticTrainer:
         self.pop = GeneticPopulation(cfg)
         self.best_eval = 0.0
         self.last_eval = 0.0
+        self._fitness_cap = FITNESS_FRAME_CAP_START
         self._rng = np.random.default_rng()
 
         # Evolution control state (mirrors browser GeneticTrainer)
@@ -109,14 +115,16 @@ class SimGeneticTrainer:
     # ── Fitness: common random numbers across the population ─────────
 
     def _evaluate_generation(self, gen_seeds: list[int]) -> dict:
-        env = self._make_env(FITNESS_FRAME_CAP)
+        env = self._make_env(self._fitness_cap)
         gen_counts = {0: 0, 1: 0, 2: 0}
+        timeouts = [0] * len(self.pop.agents)
         for idx, agent in enumerate(self.pop.agents):
             scores = []
             counts = {0: 0, 1: 0, 2: 0}
             for seed in gen_seeds:        # SAME seeds for every agent
-                s, c = run_sim_episode(env, agent, seed)
+                s, c, timed_out = run_sim_episode(env, agent, seed)
                 scores.append(s)
+                timeouts[idx] += int(timed_out)
                 for k, v in c.items():
                     counts[k] += v
             raw = float(np.mean(scores))
@@ -127,6 +135,16 @@ class SimGeneticTrainer:
             )
             for k, v in counts.items():
                 gen_counts[k] += v
+
+        # Adaptive fitness window: if the champion survives most of its
+        # episodes to the cap, fitness has saturated — double the window
+        # so selection can see the skill differences that live beyond it.
+        best_idx = int(np.argmax(self.pop.fitnesses))
+        if (timeouts[best_idx] >= max(2, len(gen_seeds) - 1)
+                and self._fitness_cap < EVAL_FRAME_CAP):
+            self._fitness_cap = min(self._fitness_cap * 2, EVAL_FRAME_CAP)
+            print(f"  ▲ fitness window saturated — raised to "
+                  f"{self._fitness_cap} frames ({self._fitness_cap/60/60:.1f} game-min)")
         return gen_counts
 
     # ── Champion eval — fixed seeds, identical to DQN protocol ──────
@@ -169,6 +187,7 @@ class SimGeneticTrainer:
             "mutation_scale": self._mutation_scale,
             "best_fitness_ever": self._best_fitness_ever,
             "gens_no_improve": self._gens_no_improve,
+            "fitness_cap": self._fitness_cap,
             "curriculum": self.curriculum.to_dict() if self.curriculum else None,
         }
         tmp = self.run_dir / "state.json.tmp"
@@ -192,6 +211,7 @@ class SimGeneticTrainer:
         self._mutation_scale = state.get("mutation_scale", self._mutation_scale)
         self._best_fitness_ever = state.get("best_fitness_ever", 0.0)
         self._gens_no_improve = state.get("gens_no_improve", 0)
+        self._fitness_cap = state.get("fitness_cap", FITNESS_FRAME_CAP_START)
         if self.curriculum is not None and state.get("curriculum"):
             from curriculum import Curriculum
             self.curriculum = Curriculum.from_dict(state["curriculum"])
@@ -285,6 +305,7 @@ class SimGeneticTrainer:
                     "mutation_scale": round(self._mutation_scale, 4),
                     "stagnated": stagnated,
                     "gen_seconds": round(gen_time, 1),
+                    "fitness_cap": self._fitness_cap,
                     "phase": (cur.phase.name if cur and not cur.finished
                               else ("done" if cur else "")),
                     "phase_status": ("stalled" if cur and not cur.finished and cur.stalled

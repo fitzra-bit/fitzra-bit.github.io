@@ -92,7 +92,7 @@ def run_genetic(args):
             print(f"gen {s['generation']:>4} | best {s['score']:>7.1f} | "
                   f"avg {s['avg_fitness']:>7.1f} | eval {s['eval_avg']:>7.1f} | "
                   f"phase {s['phase']} | mut {s['mutation_scale']:.3f} | "
-                  f"{s['gen_seconds']:.1f}s/gen"
+                  f"cap {s['fitness_cap']} | {s['gen_seconds']:.1f}s/gen"
                   + (f" | deaths {s['eval_death_causes']}" if s.get('eval_death_causes') else "")),
             web.push(s),
         ),
