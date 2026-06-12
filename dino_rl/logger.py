@@ -25,8 +25,9 @@ class RunLogger:
     """
 
     _CSV_FIELDS = [
-        "episode", "score", "best", "cleared", "steps",
-        "epsilon", "buffer", "loss", "phase", "avg20", "timestamp",
+        "episode", "score", "best", "eval_avg", "eval_best", "cleared",
+        "steps", "epsilon", "buffer", "loss", "phase", "death_cause",
+        "sps", "timestamp",
     ]
 
     def __init__(self, agent: str, cfg: dict, base_dir: str = "runs",

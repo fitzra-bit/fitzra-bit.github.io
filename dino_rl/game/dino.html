@@ -438,6 +438,8 @@ let obstacles    = [];       // {type, x, y, w, h, gap, group, speedOffset}
 let obstacleHistory = [];    // last spawned type names (duplication rule)
 let obstacleCount = 0;
 let clouds       = [{x: 200, y: 30}, {x: 480, y: 50}];
+let obstaclesCleared = 0;    // authoritative clear counter (RL reward source)
+let deathCause   = null;     // what killed the dino (RL diagnostics)
 let groundOffset = 0;
 let legFrame     = 0;
 let wingFrame    = 0;
@@ -478,6 +480,8 @@ const runner = {
   get crashed()      { return crashed; },
   get distanceRan()  { return distanceRan; },
   get currentSpeed() { return currentSpeed; },
+  get obstaclesCleared() { return obstaclesCleared; },
+  get deathCause()   { return deathCause; },
   get groundYPos()   { return TREX_GROUND_Y; },
   get tRex()         { return tRex; },
   get started()      { return started; },
@@ -510,6 +514,8 @@ const runner = {
     obstacles    = [];
     obstacleHistory = [];
     obstacleCount   = 0;
+    obstaclesCleared = 0;
+    deathCause   = null;
     groundOffset = 0;
     started      = true;
     lastTime     = null;
@@ -612,10 +618,14 @@ function checkCollision() {
       ow = ob.w - 4;  oh = ob.h - 2;
     }
     if (dx < ox + ow && dx + dw > ox && dy < oy + oh && dy + dh > oy) {
-      return true;
+      if (ob.type === 'PTERODACTYL') {
+        const label = {100: 'low', 75: 'mid', 50: 'high'}[ob.y] || '?';
+        return 'bird_' + label;
+      }
+      return ob.type.toLowerCase();
     }
   }
-  return false;
+  return null;
 }
 
 // ── Update (dt-based, original frame normalisation) ─────────────────
@@ -642,9 +652,13 @@ function update(dt) {
     }
   }
 
-  // Obstacles move at game speed (+ bird offset)
+  // Obstacles move at game speed (+ bird offset); count clears on pass
   for (const ob of obstacles) {
     ob.x -= (currentSpeed + (ob.speedOffset || 0)) * fe;
+    if (!ob.counted && ob.x + ob.w < TREX.X) {
+      ob.counted = true;
+      obstaclesCleared++;
+    }
   }
   obstacles = obstacles.filter(ob => ob.x + ob.w > -10);
 
@@ -676,8 +690,10 @@ function update(dt) {
     if (cl.x < -50) { cl.x = W + 30; cl.y = 20 + Math.random() * 40; }
   }
 
-  if (checkCollision()) {
+  const cause = checkCollision();
+  if (cause !== null) {
     crashed = true;
+    deathCause = cause;
     if (distanceRan > highScore) highScore = distanceRan;
   }
 }

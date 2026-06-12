@@ -1,6 +1,19 @@
+"""Browser game state → the SAME 15-feature vector as game/dino_env.py.
+
+Feature parity between the sim (training) and the browser (eval/demo) is
+what lets a sim-trained network play the real game unchanged. Any change
+here must be mirrored in DinoEnv._observe() and vice versa.
+"""
+
 from dataclasses import dataclass, field
 from typing import List, Optional
 import numpy as np
+
+# Must match dino_env.py
+_W, _H = 600.0, 150.0
+_TREX_X, _TREX_W = 50.0, 44.0
+_INITIAL_SPEED = 6.0
+_TTC_FRAMES_NORM = 120.0
 
 
 @dataclass
@@ -27,73 +40,54 @@ class GameState:
     dino_ducking: bool
     obstacles: List[Obstacle] = field(default_factory=list)
     ground_y: float = 93.0
+    cleared: int = 0                  # authoritative counter from the game
 
-    def to_array(
-        self,
-        speed_norm: float = 20.0,
-        dist_norm: float = 600.0,
-        y_norm: float = 150.0,
-        vel_norm: float = 20.0,
-        ttc_clip: float = 2.0,
-    ) -> np.ndarray:
-        """Normalize state into a fixed-length float32 vector for the neural net.
+    def to_array(self) -> np.ndarray:
+        """15 features — identical layout to DinoEnv._observe():
 
-        Features (13 total):
-          0  distance to obstacle 1    (norm, 1.0 = far / none)
-          1  y-position of obstacle 1  (norm) ← top edge of sprite, NOT size
-               (original 600×150 coordinate space, y_norm=150)
-               cactus small: 0.70   cactus large: 0.60
-               bird low:  0.67  (must JUMP — hits standing and ducking)
-               bird mid:  0.50  (must DUCK — hits standing, clears duck)
-               bird high: 0.33  (run under — clears standing)
-          2  width of obstacle 1       (norm)
-          3  obstacle 1 is bird        (0/1)
-          4  distance to obstacle 2    (norm)
-          5  y-position of obstacle 2  (norm)
-          6  obstacle 2 is bird        (0/1)
-          7  current speed             (norm)
-          8  dino y offset from ground (norm, 0=on ground, +up)
-          9  dino vertical velocity    (norm, +up)
-         10  dino jumping              (0/1)
-         11  dino ducking              (0/1)  ← new: dino's own crouch state
-         12  time-to-collision obs1    (norm)  ← new: obs1_dist/speed, clipped
-                                                  speed-invariant approach timing
+          0 obs1 dist (x/600, 1=far/none)     8 gap obs1→obs2 (norm, 1=none)
+          1 obs1 top-edge y (/150)            9 speed, (speed−6)/7 → [0,1]
+          2 obs1 width (/600)                10 dino y-offset from ground (/150)
+          3 obs1 is_bird                     11 dino y-velocity (/20, +down)
+          4 obs2 dist                        12 jumping flag
+          5 obs2 top-edge y                  13 ducking flag
+          6 obs2 width                       14 TTC obs1 (frames-to-impact /120)
+          7 obs2 is_bird
+
+        Obstacle y reference (original coordinates): cactus small 0.70,
+        large 0.60; bird low 0.67 (jump it), mid 0.50 (duck it),
+        high 0.33 (run under).
         """
-        def obs_features(obs: Optional[Obstacle]):
-            if obs is None:
+        def feats(ob: Optional[Obstacle]):
+            if ob is None:
                 return [1.0, 0.0, 0.0, 0.0]
-            return [
-                max(0.0, obs.x / dist_norm),
-                obs.y / y_norm,           # vertical position of top edge (not size)
-                obs.width / dist_norm,
-                float(obs.is_bird),
-            ]
+            return [max(0.0, ob.x / _W), ob.y / _H, ob.width / _W, float(ob.is_bird)]
 
-        o1 = self.obstacles[0] if len(self.obstacles) > 0 else None
-        o2 = self.obstacles[1] if len(self.obstacles) > 1 else None
+        # Only obstacles still ahead of the dino (parity with sim's
+        # not-counted filter — the browser list includes passed obstacles
+        # until they scroll off-screen).
+        ahead = [ob for ob in self.obstacles if ob.x + ob.width >= _TREX_X]
+        o1 = ahead[0] if len(ahead) > 0 else None
+        o2 = ahead[1] if len(ahead) > 1 else None
 
-        o1_feats = obs_features(o1)
-        o2_feats = obs_features(o2)
+        f1, f2 = feats(o1), feats(o2)
+        gap = (o2.x - (o1.x + o1.width)) / _W if (o1 and o2) else 1.0
 
-        speed_n     = self.speed / speed_norm
-        dino_offset = max(0.0, (self.ground_y - self.dino_y) / y_norm)
+        if o1 is not None:
+            frames = max(0.0, o1.x - (_TREX_X + _TREX_W)) / max(self.speed, 0.1)
+            ttc = min(frames, _TTC_FRAMES_NORM) / _TTC_FRAMES_NORM
+        else:
+            ttc = 1.0
 
-        # Time-to-collision: how many "speed-lengths" until obs1 reaches the dino.
-        # Using normalised dist / normalised speed gives a ratio that is large when
-        # the obstacle is far or the game is slow, and small when it's close or fast.
-        # Clipped to [0, ttc_clip] then divided back so the feature sits in [0, 1].
-        ttc = min(o1_feats[0] / (speed_n + 0.01), ttc_clip) / ttc_clip
-
-        vec = (
-            o1_feats
-            + [o2_feats[0], o2_feats[1], o2_feats[3]]   # dist, height, is_bird
-            + [
-                speed_n,
-                dino_offset,
-                self.dino_vel_y / vel_norm,
+        return np.array(
+            f1 + f2 + [
+                gap,
+                (self.speed - _INITIAL_SPEED) / 7.0,
+                max(0.0, (self.ground_y - self.dino_y)) / _H,
+                self.dino_vel_y / 20.0,
                 float(self.dino_jumping),
-                float(self.dino_ducking),                # feature 11
-                ttc,                                     # feature 12
-            ]
+                float(self.dino_ducking),
+                ttc,
+            ],
+            dtype=np.float32,
         )
-        return np.array(vec, dtype=np.float32)

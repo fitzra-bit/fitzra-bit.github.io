@@ -104,7 +104,7 @@ def run_dqn(args):
     web = DashboardServer()
     web.start()   # http://localhost:8765  (daemon thread — auto-stops with process)
 
-    driver = DinoDriver(headless=args.headless)
+    # Training is pure simulation — no Chrome, no game server needed.
     with RunLogger(agent="dqn", cfg=cfg, resume_dir=resume_dir) as log:
         # Restore curriculum + counters from state.json after logger exists
         if resume_dir:
@@ -115,29 +115,27 @@ def run_dqn(args):
                     curriculum = Curriculum.from_dict(state["curriculum"])
                     print(f"Resuming at episode {start_episode}, "
                           f"phase '{curriculum.phase.name if not curriculum.finished else 'done'}' "
-                          f"({curriculum.episodes_in_phase} eps in)")
+                          f"({curriculum.evals_in_phase} evals in)")
 
-        try:
-            with DQNDashboard() as dash:
-                def on_ep_end(stats):
-                    dash.update(stats)   # Rich terminal dashboard
-                    web.push(stats)      # Web dashboard
+        with DQNDashboard() as dash:
+            def on_ep_end(stats):
+                dash.update(stats)   # Rich terminal dashboard
+                web.push(stats)      # Web dashboard
 
-                trainer = DQNTrainer(
-                    episodes=args.episodes,
-                    on_episode_end=on_ep_end,
-                    cfg=cfg,
-                    logger=log,
-                    checkpoint_every=args.checkpoint,
-                    load_path=load_path,
-                    curriculum=curriculum,
-                    start_episode=start_episode,
-                )
-                trainer.train(driver)
+            trainer = DQNTrainer(
+                episodes=args.episodes,
+                on_episode_end=on_ep_end,
+                cfg=cfg,
+                logger=log,
+                checkpoint_every=args.checkpoint,
+                load_path=load_path,
+                curriculum=curriculum,
+                start_episode=start_episode,
+            )
+            trainer.train()
 
-            print(f"\nTraining complete. Best score: {trainer.best_score:.1f}")
-        finally:
-            driver.close()
+        print(f"\nTraining complete. Best eval: {trainer.best_eval:.1f} "
+              f"(best training score: {trainer.best_score:.1f})")
 
 
 def run_demo(args):
@@ -158,9 +156,7 @@ def run_demo(args):
     print("Mode:    demo (ε=0, no training, no buffer)")
     print("Control: Ctrl+C to stop\n")
 
-    poll       = cfg["poll_interval"]
-    close      = cfg.get("clearing_close_threshold", 0.25)
-    far        = cfg.get("clearing_far_threshold", 0.55)
+    poll       = GAME_CONFIG["poll_interval"]
     dbg_every  = getattr(args, "debug_steps", 0)
 
     _ACTIONS = {0: "noop", 1: "jump", 2: "duck"}
@@ -180,20 +176,20 @@ def run_demo(args):
                 continue
 
             obs            = state.to_array()
-            prev_obs1_dist = obs[0]
             ep_score       = 0.0
             ep_steps       = 0
             ep_cleared     = 0
             debug_ep       = (ep == 1 and dbg_every > 0)
 
-            for _ in range(cfg["max_steps_per_episode"]):
+            for _ in range(20_000):
                 # Debug: show what the network sees and decides
                 if debug_ep and ep_steps % dbg_every == 0:
                     import torch as _torch
                     with _torch.no_grad():
                         t  = _torch.from_numpy(obs).unsqueeze(0)
                         qv = net(t).squeeze(0).numpy()
-                    feat_names = ["d1","y1","w1","b1","d2","y2","b2","spd","dy","vy","jmp","duc","ttc"]
+                    feat_names = ["d1","y1","w1","b1","d2","y2","w2","b2",
+                                  "gap","spd","dy","vy","jmp","duc","ttc"]
                     feat_str = "  ".join(f"{n}={v:.2f}" for n, v in zip(feat_names, obs))
                     q_str    = "  ".join(f"{_ACTIONS[i]}={qv[i]:.3f}" for i in range(3))
                     chosen   = _ACTIONS[int(qv.argmax())]
@@ -208,16 +204,10 @@ def run_demo(args):
                 if next_state is None:
                     break
 
-                next_obs       = next_state.to_array()
-                curr_obs1_dist = next_obs[0]
-
-                if prev_obs1_dist < close and curr_obs1_dist > far:
-                    ep_cleared += 1
-
-                obs            = next_obs
-                prev_obs1_dist = curr_obs1_dist
-                ep_score       = next_state.score
-                ep_steps      += 1
+                obs        = next_state.to_array()
+                ep_score   = next_state.score
+                ep_cleared = next_state.cleared   # authoritative game counter
+                ep_steps  += 1
 
                 if next_state.crashed:
                     break

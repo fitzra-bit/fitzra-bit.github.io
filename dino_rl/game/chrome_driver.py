@@ -94,6 +94,7 @@ try {
         dinoVelY: tRex.jumpVelocity,
         jumping:  tRex.jumping,
         ducking:  tRex.ducking,
+        cleared:  r.obstaclesCleared || 0,
         obstacles: obs
     });
 } catch(e) {
@@ -215,6 +216,7 @@ class DinoDriver:
             dino_ducking=raw["ducking"],
             obstacles=obstacles,
             ground_y=self.ground_y,
+            cleared=int(raw.get("cleared", 0)),
         )
 
     # ------------------------------------------------------------------

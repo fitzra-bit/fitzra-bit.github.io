@@ -1,26 +1,31 @@
 # Chrome Dino RL
 
-Reinforcement learning agents that teach themselves to play the Chrome offline dinosaur game — a faithful self-hosted clone driven live via Selenium + JS injection.
+Reinforcement learning agents that teach themselves to play the Chrome offline dinosaur game.
 
-Two learning modes:
-- **DQN with curriculum** (the main event) — Double DQN learns through staged phases that advance, recover from stalls, and checkpoint automatically
-- **Genetic** — a population of agents evolves across generations
+**Architecture:** training runs in a Python simulation (`game/dino_env.py`,
+~35,000 steps/sec) that mirrors the browser game constant-for-constant; the
+browser game (`game/dino.html`) is the eval/demo surface. Double/Dueling DQN
+with n-step returns, sparse stationary rewards, and an environment-shaped
+curriculum that advances, recovers from stalls, and checkpoints automatically.
+
+> Full design rationale and operating procedure: **[OVERHAUL.md](OVERHAUL.md)**
 
 ## Quick start — the only two commands you need
 
 ```bash
 cd dino_rl
-python -m http.server 8766 &        # serve the game
-python main.py --agent dqn --episodes 5000    # start curriculum training
+python main.py --agent dqn --episodes 100000   # start curriculum training
 ```
 
-After **any** stop — crash, Ctrl+C, reboot:
+No Chrome needed for training. After **any** stop — crash, Ctrl+C, reboot:
 
 ```bash
 python main.py --agent dqn --auto   # resumes mid-phase, nothing lost
 ```
 
-Watch progress at **http://localhost:8765** (phase, scores, Q-values, action mix, shaped-reward breakdown).
+Watch progress at **http://localhost:8765** — the **Eval Avg** number (greedy
+evaluation on fixed seeds) is the metric that drives everything: phase gates,
+best checkpoints, stall detection.
 
 ## The game
 
@@ -51,27 +56,29 @@ Playable by hand too: space/↑ = jump, ↓ = duck.
 
 ## The curriculum (`curriculum.py`)
 
-Declarative phases — each defines game params, reward-shaping overrides,
-exploration reset, and a completion threshold:
+Rewards never change (+1 clear, −1 death). Difficulty ramps through the
+**environment** — speed caps compress the jump-timing window, then birds add
+the duck/jump/run discrimination problem:
 
-| Phase | Game | Added shaping | Completes at avg20 |
-|---|---|---|---|
-| 1-jump | cacti only | outcome + jump-approach nudge | 200 |
-| 2-shaping | cacti only | mild idle penalty, tighter approach window | 500 |
-| 3-converge | cacti only | none — convergence run | 1000 |
-| 4-birds | full game | none (birds force duck learning) | 2000 |
+| Phase | Environment | Gate (greedy eval avg) |
+|---|---|---|
+| 1-slow | cacti only, speed ≤ 8 | 600 |
+| 2-mid | cacti only, speed ≤ 10 | 800 |
+| 3-full-speed | cacti only, speed ≤ 13 | 1000 |
+| 4-birds | full game | 1500 |
+
+Reference points: random policy ≈ 45; perfectly-timed scripted jumper ≈ 6,700.
 
 The trainer is self-driving:
 
-- **Auto-advance** — phase completes → checkpoint saved → next phase's rewards
-  merged, epsilon reset, game URL re-navigated. No restart, no edits.
-- **Stall recovery** — no rolling-avg improvement for `stall_window` episodes →
-  (1) epsilon boost, then (2) revert to phase-best weights + boost, then
+- **Auto-advance** — eval gate met → checkpoint → next phase's env built
+  in-process. No restart, no edits.
+- **Stall recovery** — no eval improvement for `stall_evals` rounds →
+  (1) ε-floor boost, then (2) revert to phase-best weights + boost, then
   (3) STALLED flag in logs/dashboard (the only point a human is needed —
   and it means the phase design needs a change, not a restart).
-- **Resume** — `state.json` written every episode (phase, window, epsilon,
-  counters); full checkpoints include optimizer state. `--auto` continues
-  exactly where the run died.
+- **Resume** — `state.json` written every episode; full checkpoints include
+  optimizer state. `--auto` continues exactly where the run died.
 
 ## Run artifacts
 
@@ -119,16 +126,21 @@ dino_rl/
     └── web_dashboard.py        # http://localhost:8765 — charts + phase status
 ```
 
-## State features (13)
+## State features (15)
+
+Identical layout in sim (`dino_env._observe`) and browser
+(`game_state.to_array`) — that parity is what lets a sim-trained network
+play the real game:
 
 ```
-0  dist to obstacle 1      7  speed
-1  obs1 top-edge y         8  dino y-offset
-2  obs1 width              9  dino y-velocity
-3  obs1 is-bird           10  jumping flag
-4  dist to obstacle 2     11  ducking flag
-5  obs2 top-edge y        12  time-to-collision (speed-invariant)
-6  obs2 is-bird
+0  obs1 dist               8  gap obs1→obs2
+1  obs1 top-edge y         9  speed (speed−6)/7
+2  obs1 width             10  dino y-offset
+3  obs1 is-bird           11  dino y-velocity
+4  obs2 dist              12  jumping flag
+5  obs2 top-edge y        13  ducking flag
+6  obs2 width             14  time-to-collision (frames/120)
+7  obs2 is-bird
 ```
 
 Bird heights in the y feature: low 0.67 (jump it), mid 0.50 (duck it),

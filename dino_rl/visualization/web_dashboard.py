@@ -158,6 +158,7 @@ body{background:#0d1117;color:#e6edf3;font-family:'Segoe UI',monospace;font-size
 <div id="hdr">
   <h1>&#11035; DINO RL</h1>
   <div class="kpi c"><div class="v" id="H-phase">—</div><div class="l">Phase</div></div>
+  <div class="kpi y"><div class="v" id="H-eval">—</div><div class="l">Eval Avg</div></div>
   <div class="kpi g"><div class="v" id="H-best">—</div><div class="l">Best Score</div></div>
   <div class="kpi c"><div class="v" id="H-ep">—</div><div class="l">Episode</div></div>
   <div class="kpi y"><div class="v" id="H-avg">—</div><div class="l">Avg (50ep)</div></div>
@@ -367,6 +368,7 @@ function render(data) {
   var phEl = document.getElementById('H-phase');
   phEl.textContent = c.phase || '—';
   phEl.style.color = (c.phase_status === 'stalled') ? '#f85149' : '';
+  document.getElementById('H-eval').textContent = (c.eval_avg != null) ? c.eval_avg : '—';
   document.getElementById('hdr-time').textContent= new Date().toLocaleTimeString();
 
   // Score chart

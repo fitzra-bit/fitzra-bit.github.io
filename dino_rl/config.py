@@ -1,4 +1,6 @@
 GENETIC_CONFIG = {
+    # Legacy browser-based mode — kept as a demo of evolution vs. gradient
+    # learning. Serious training happens in the sim via the DQN path.
     "population_size": 50,
     "elite_fraction": 0.15,
     "mutation_rate": 0.15,
@@ -12,57 +14,59 @@ GENETIC_CONFIG = {
     "spam_rate_threshold": 0.50,
     "spam_penalty_max": 0.75,
     "crossover_type": "uniform",
-    "network_layers": [11, 16, 8, 3],
+    "network_layers": [15, 16, 8, 3],
     "max_steps_per_episode": 20_000,
     "poll_interval": 0.05,
     "parallel_workers": 1,
 }
 
-# ── DQN base config = curriculum Phase 1 ─────────────────────────────────────
-# Phase 1 learnings (1A/1B experiments) baked in:
-#   * Pure outcome rewards first — penalties during exploration bias Q(jump)
-#     negative before the model has any timing, converging on noop.
-#   * Then directional nudge only (jump_approach_bonus + airborne penalty).
-#   * Idle penalties arrive in Phase 2 — see curriculum.py for the full
-#     declarative phase plan (thresholds, shaping layers, stall handling).
-# Phase transitions, completion detection, stall recovery, and resume are
-# automatic: python main.py --agent dqn  /  python main.py --agent dqn --auto
+# ── DQN — sim-trained, sparse rewards, env-shaped curriculum ─────────────────
+# Training runs against game/dino_env.py (~35k steps/sec, deterministic).
+# Rewards are sparse and IDENTICAL across all curriculum phases; difficulty
+# ramps through environment knobs (speed caps, birds) — see curriculum.py.
+# The browser game is the eval/demo surface (python main.py --demo).
 DQN_CONFIG = {
-    "lr": 5e-5,                     # was 1e-4 — halved to reduce oscillation from large reward scale
+    # Network: dueling trunk (V/A heads appended internally)
+    "network_layers": [15, 128, 64],
+
+    # Optimisation
+    "lr": 1e-4,
     "gamma": 0.99,
-    "epsilon_start": 1.0,
-    "epsilon_end": 0.05,            # lower floor — 15% random was injecting too much noise into converged policy
-    "epsilon_decay": 0.990,         # reaches ~0.05 by ep ~340
+    "n_step": 3,                    # n-step returns — outcome signal reaches
+                                    # earlier decisions 3× faster
     "batch_size": 128,
-    "buffer_size": 20_000,
-    "target_update_freq": 4000,     # was 2000 — crashes follow target updates at peaks; slower updates break that cycle
-    "network_layers": [13, 128, 64, 3],
-    "max_steps_per_episode": 20_000,
-    "poll_interval": 0.025,
+    "buffer_size": 200_000,
+    "min_buffer": 5_000,
+    "tau": 0.005,                   # soft target update per step
 
-    # ── Core rewards (the only active signals in Phase 1A) ───────────────────
-    "death_penalty":           -50.0,   # halved — same 3:2 ratio vs clearing, half the Q-value variance
-    "survival_reward_scale":     0.1,
-    "clearing_bonus":           75.0,   # halved from 150 — loss was flat at 430-500 all run; reward scale too large
-    "clearing_close_threshold":  0.25,
-    "clearing_far_threshold":    0.55,
+    # Exploration — step-based linear decay + noop-biased random actions
+    "epsilon_start": 1.0,
+    "epsilon_end": 0.05,
+    "epsilon_decay_steps": 150_000,
+    "explore_action_probs": [0.70, 0.15, 0.15],   # noop, jump, duck
 
-    # ── Phase 1B directional shaping (no idle punishment) ────────────────────
-    # Pure outcome (1A) plateaued at ~1.5 clears/ep after 750 eps — policy
-    # couldn't self-stabilise.  These two signals give directional labels
-    # without poisoning exploration the way the idle penalty did.
-    "approach_ttc_far":      0.35,   # approach zone upper bound (tighter than old 0.40)
-    "approach_ttc_near":     0.05,   # approach zone lower bound
-    "jump_approach_bonus":   10.0,   # +10 for jumping near cactus (not near bird)
-    "airborne_jump_penalty":  5.0,   # -5 for double-jump while already airborne
+    # Environment
+    "action_repeat": 2,             # frames per decision (~30 decisions/sec)
+    "max_episode_frames": 36_000,   # 10 game-minutes → episode timeout
 
-    # Phase 2+ shaping (idle penalty, tighter windows) and all completion
-    # thresholds live in curriculum.py — applied automatically per phase.
+    # Rewards (constant across ALL phases — never tune these per phase)
+    "survival_reward": 0.001,       # per frame, tie-breaker only
+    "clear_reward": 1.0,
+    "death_reward": -1.0,
+
+    # Evaluation protocol — drives gates, checkpoints, stall detection
+    "eval_every": 50,               # episodes between greedy eval rounds
+    "eval_episodes": 5,             # fixed-seed episodes per round
+
+    # Phase-entry exploration (new env ⇒ re-explore briefly)
+    "phase_entry_epsilon": 0.25,
+    "phase_entry_explore_steps": 20_000,
 }
 
 GAME_CONFIG = {
+    # Browser game — used for eval/demo only (training is in the sim).
     "headless": False,
-    "game_url": "http://localhost:8766/game/dino.html",  # self-hosted game
+    "game_url": "http://localhost:8766/game/dino.html",
     "poll_interval": 0.05,
     "canvas_width": 600,
     "canvas_height": 150,
