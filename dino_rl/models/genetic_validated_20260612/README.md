@@ -1,4 +1,12 @@
-# Genetic champion — 2026-06-12 (first full-curriculum completion by evolution)
+# Genetic champion — 2026-06-12 (SUPERSEDED — fixed-cap artifact)
+
+> **This run is superseded by `models/genetic_validated_20260612_fixed/`.**
+> The fitness cap was fixed at 2 game-minutes; once the population could
+> survive the full window, selection saturated and evolution random-walked.
+> The corrected run (adaptive cap) reached eval **11,087** — same as DQN.
+> The comparison table below reflects the **uncorrected** numbers.
+
+# Original run — first full-curriculum completion by evolution
 
 The sim-based genetic algorithm (`agents/genetic/sim_trainer.py`) completed
 the same 4-phase curriculum as the DQN — same sim, same fixed-seed eval
