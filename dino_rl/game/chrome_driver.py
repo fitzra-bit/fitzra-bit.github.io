@@ -94,6 +94,7 @@ try {
         dinoVelY: tRex.jumpVelocity,
         jumping:  tRex.jumping,
         ducking:  tRex.ducking,
+        cleared:  r.obstaclesCleared || 0,
         obstacles: obs
     });
 } catch(e) {
@@ -147,7 +148,15 @@ class DinoDriver:
     # ------------------------------------------------------------------
 
     def _open_game(self):
-        url = GAME_CONFIG["game_url"]
+        self.load_url(GAME_CONFIG["game_url"])
+
+    def load_url(self, url: str):
+        """Navigate to a game URL (e.g. with new curriculum params) and re-init.
+
+        Used for mid-run phase transitions: dino.html reads its settings
+        (birds on/off, speed caps) from URL query params, so changing phase
+        is just a page navigation — no game-file edits, no browser restart.
+        """
         try:
             self.driver.get(url)
         except WebDriverException:
@@ -207,6 +216,7 @@ class DinoDriver:
             dino_ducking=raw["ducking"],
             obstacles=obstacles,
             ground_y=self.ground_y,
+            cleared=int(raw.get("cleared", 0)),
         )
 
     # ------------------------------------------------------------------

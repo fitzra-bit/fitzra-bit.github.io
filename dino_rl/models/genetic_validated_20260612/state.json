@@ -1,0 +1,15 @@
+{
+  "generation": 88,
+  "best_eval": 8732.700000000024,
+  "mutation_scale": 0.26160000000000005,
+  "best_fitness_ever": 1727.412499999927,
+  "gens_no_improve": 2,
+  "curriculum": {
+    "phase_idx": 4,
+    "evals_in_phase": 0,
+    "best_eval_in_phase": 0.0,
+    "evals_since_improve": 0,
+    "interventions_used": 0,
+    "stalled": false
+  }
+}

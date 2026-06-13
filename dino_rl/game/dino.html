@@ -5,371 +5,777 @@
 <title>Dino RL</title>
 <style>
 * { margin:0; padding:0; box-sizing:border-box; }
-body { background:#f7f7f7; display:flex; align-items:center; justify-content:center; height:100vh; font-family: monospace; }
-canvas { border-bottom: 2px solid #535353; image-rendering: pixelated; }
-#score { position:fixed; top:10px; right:16px; font-size:18px; color:#535353; font-weight:bold; font-family:monospace; }
+body { background:#fff; display:flex; align-items:center; justify-content:center; height:100vh; }
+#wrap { position:relative; }
+canvas { display:block; image-rendering: pixelated; }
 </style>
 </head>
 <body>
-<canvas id="c" width="800" height="300"></canvas>
-<div id="score">HI 00000  00000</div>
+<div id="wrap"><canvas id="c" width="1200" height="300"></canvas></div>
 <script>
 (function(){
 "use strict";
 
-// ── Constants ────────────────────────────────────────────────────
-const FPS        = 60;
-const GRAVITY    = 0.6;
-const JUMP_VEL   = -11;
-const DUCK_VEL   = 6;
-const GROUND_Y   = 220;
-const DINO_W     = 46;
-const DINO_H     = 52;
-const DINO_DUCK_H= 26;
-const DINO_X     = 80;
+// ════════════════════════════════════════════════════════════════════
+//  Chrome Dino clone — physics & pace match the original Chromium
+//  offline game (components/neterror/resources/offline.js).
+//
+//  Simulation runs in the ORIGINAL coordinate space: 600 × 150,
+//  ground line at y=140 (BOTTOM_PAD 10), tRex ground yPos = 93.
+//  Rendered at 2× scale onto a 1200×300 canvas.
+//
+//  The Runner.instance_ API matches what game/chrome_driver.py reads,
+//  so the RL driver works unchanged.
+//
+//  Curriculum control via URL params (no file edits between phases):
+//    ?birds=0|1        allow pterodactyls           (default 1)
+//    ?birdmin=8.5      min speed before birds spawn (default 8.5, original)
+//    ?maxspeed=13      speed cap                    (default 13, original)
+//    ?accel=0.001      acceleration per frame       (default 0.001, original)
+//  Example Phase-1 URL:  dino.html?birds=0
+// ════════════════════════════════════════════════════════════════════
 
-const CACTI_CONFIGS = [
-  {w:17, h:35, count:1},
-  {w:34, h:35, count:2},
-  {w:51, h:35, count:3},
-  {w:17, h:50, count:1},
-  {w:34, h:50, count:2},
-];
+// ── URL-param curriculum config ──────────────────────────────────────
+const Q = new URLSearchParams(location.search);
+const ALLOW_BIRDS    = Q.get('birds')    !== '0';
+const BIRD_MIN_SPEED = parseFloat(Q.get('birdmin')  || '8.5');
+const MAX_SPEED      = parseFloat(Q.get('maxspeed') || '13');
+const ACCELERATION   = parseFloat(Q.get('accel')    || '0.001');
 
-const BIRD_H = 20;
-const BIRD_W = 42;
-const BIRD_Y_OPTIONS = [GROUND_Y - 60, GROUND_Y - 90, GROUND_Y - 130]; // low/mid/high
+// ── Original game constants ──────────────────────────────────────────
+const W = 600, H = 150;            // simulation space (original)
+const SCALE = 2;                   // render scale
+const MS_PER_FRAME = 1000 / 60;    // physics normalised to 60fps frames
+const BOTTOM_PAD   = 10;
+const GROUND_LINE  = H - BOTTOM_PAD;        // 140 — feet / cactus base
+const GRAVITY      = 0.6;
+const INITIAL_JUMP_VELOCITY = -10;          // minus speed/10 at takeoff
+const DROP_VELOCITY = -5;                   // ascent cap after max height
+const MAX_JUMP_Y    = 30;                   // yPos above which ascent is capped
+const SPEED_DROP_COEFFICIENT = 3;           // fast-fall multiplier (duck in air)
+const INITIAL_SPEED = 6;
+const GAP_COEFFICIENT = 0.6;
+const MAX_GAP_COEFFICIENT = 1.5;
+const MAX_OBSTACLE_LENGTH = 3;              // cactus group size
+const MAX_OBSTACLE_DUPLICATION = 2;         // no 3 identical in a row
+const CLEAR_TIME = 3000;                    // ms before first obstacle
 
-// ── Canvas ───────────────────────────────────────────────────────
-const canvas = document.getElementById('c');
-const ctx    = canvas.getContext('2d');
+// tRex dimensions (original sprite sizes)
+const TREX = { X: 50, W: 44, H: 47, W_DUCK: 59, H_DUCK: 25 };
+const TREX_GROUND_Y = GROUND_LINE - TREX.H;   // 93 — matches chrome_driver default
 
-// ── Colors ───────────────────────────────────────────────────────
-const COL = {
-  dino:      '#535353',
-  cactus:    '#535353',
-  bird:      '#535353',
-  ground:    '#535353',
-  cloud:     '#ccc',
+// Obstacle type definitions (original obstacle config)
+const OB_TYPES = {
+  CACTUS_SMALL: { w: 17, h: 35, yPos: 105, minGap: 120, multipleSpeed: 4 },
+  CACTUS_LARGE: { w: 25, h: 50, yPos: 90,  minGap: 120, multipleSpeed: 7 },
+  PTERODACTYL:  { w: 46, h: 40, yPositions: [100, 75, 50], minGap: 150,
+                  minSpeed: BIRD_MIN_SPEED, speedOffset: 0.8 },
 };
 
-// ── Drawing helpers ──────────────────────────────────────────────
-function drawDino(x, y, ducking, frame) {
-  ctx.fillStyle = COL.dino;
-  if (ducking) {
-    // Ducking body
-    ctx.fillRect(x, y + DINO_H - DINO_DUCK_H, DINO_W + 10, DINO_DUCK_H);
-    // Eye
-    ctx.fillStyle = '#f7f7f7';
-    ctx.fillRect(x + DINO_W - 2, y + DINO_H - DINO_DUCK_H + 4, 6, 6);
-    ctx.fillStyle = COL.dino;
-    ctx.fillRect(x + DINO_W + 1, y + DINO_H - DINO_DUCK_H + 7, 3, 3);
-  } else {
-    // Body
-    ctx.fillRect(x + 6, y + 10, DINO_W - 6, DINO_H - 10);
-    // Head
-    ctx.fillRect(x + 16, y, 26, 20);
-    // Eye
-    ctx.fillStyle = '#f7f7f7';
-    ctx.fillRect(x + 32, y + 4, 8, 8);
-    ctx.fillStyle = COL.dino;
-    ctx.fillRect(x + 34, y + 6, 5, 5);
-    // Mouth opening
-    ctx.fillStyle = '#f7f7f7';
-    ctx.fillRect(x + 36, y + 14, 6, 3);
-    ctx.fillStyle = COL.dino;
-    // Legs (alternating)
-    if (!jumping) {
-      if (frame < 0.5) {
-        ctx.fillRect(x + 10, y + DINO_H - 20, 10, 20);
-        ctx.fillRect(x + 28, y + DINO_H - 10, 10, 10);
-      } else {
-        ctx.fillRect(x + 10, y + DINO_H - 10, 10, 10);
-        ctx.fillRect(x + 28, y + DINO_H - 20, 10, 20);
-      }
-    } else {
-      ctx.fillRect(x + 10, y + DINO_H - 12, 10, 12);
-      ctx.fillRect(x + 28, y + DINO_H - 6, 10, 6);
+// ── Pixel-art sprites ────────────────────────────────────────────────
+// Cell = 1 game px. '#' = body colour. Hand-drawn to match the
+// original silhouettes at original sizes.
+
+function bmp(rows) {  // parse sprite string → {w, h, rows}
+  return { w: Math.max(...rows.map(r => r.length)), h: rows.length, rows };
+}
+
+// T-Rex standing/running body 44×47 — head right, tail left.
+const DINO_BODY = bmp([
+"............................##############.",
+"...........................################",
+"...........................##.#############",
+"...........................################",
+"...........................################",
+"...........................################",
+"...........................################",
+"...........................#########.......",
+"...........................############....",
+"...........................#########.......",
+"..........................##########.......",
+"#........................###########.......",
+"#.......................#############......",
+"##......................##############.....",
+"##......................################....",
+"###...................##################...",
+"####.................####################...",
+"#####...............#####################...",
+"#######............######################...",
+"#########..........###################.....",
+"##########################...##.#..........",
+"#########################...###.#..........",
+"########################....####...........",
+"#######################.....##.............",
+"######################......##.............",
+"#####################.......................",
+"....#################.......................",
+".....###############........................",
+"......#############.........................",
+".......###########..........................",
+"........##########..........................",
+".........########............................",
+"..........#######............................",
+"...........######............................"]);
+
+// Leg frames drawn below the body block (rows 33-46 of the 47px sprite)
+const LEGS_RUN_A = bmp([   // left leg forward
+"...........##...##..........................",
+"...........##...##..........................",
+"...........##...##..........................",
+"...........##...####........................",
+"...........####.............................",
+"...........##...............................",
+"...........####..............................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+".............................................."]);
+const LEGS_RUN_B = bmp([   // right leg forward
+"...........##...##..........................",
+"...........##...##..........................",
+"...........##...##..........................",
+"...........##...##..........................",
+"...........##...####........................",
+"................##...........................",
+"................####.........................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+".............................................."]);
+const LEGS_STAND = bmp([   // both legs down (jump / idle / dead)
+"...........##...##..........................",
+"...........##...##..........................",
+"...........##...##..........................",
+"...........##...##..........................",
+"...........####.####.........................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+".............................................."]);
+
+// Ducking T-Rex 59×25 — long flat body, head low at right.
+const DINO_DUCK = bmp([
+".............................######........",
+"............................########.......",
+"............................##.#####.......",
+"#...........................########.......",
+"##..........................########.......",
+"###.....................################...",
+"####.................#######################",
+"#####...............#######################.",
+"###########.........###################.....",
+"####################################........",
+"###################################.........",
+"##################################..........",
+"#################################...........",
+"...############################..............",
+".....########################.................",
+".......####################...................",
+".........############.........................",
+"..........##....##.............................",
+"..........##....##.............................",
+"..........##....####...........................",
+"..........####.................................",
+"..........##...................................",
+"..........####.................................",
+"...............................................",
+"..............................................."]);
+
+// Small cactus 17×35
+const CACTUS_S = bmp([
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"##....#####....##",
+"###...#####...###",
+"###...#####...###",
+"###...#####...###",
+"###...#####...###",
+"###...#####...###",
+"###...#####...###",
+"###...#####...###",
+"###...#####...###",
+"###...#####...###",
+"####..#####..####",
+".###############.",
+"..#############..",
+"....#########....",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......"]);
+
+// Large cactus 25×50
+const CACTUS_L = bmp([
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+"####.....#######.....####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"######...#######...######",
+".#######################.",
+"..#####################..",
+"....#################....",
+".......###########.......",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######........."]);
+
+// Pterodactyl 46×40 — flies left (beak toward dino), two wing frames
+const BIRD_UP = bmp([      // wing raised above body
+"..........................##..................",
+".........................####.................",
+".........................#####................",
+"........................######................",
+"........................#######...............",
+".......................########...............",
+".......................#########..............",
+"......................##########..............",
+"......................###########.............",
+".....................############.............",
+".....................############.............",
+"....................#############.............",
+"....................#############.............",
+"..........###......##############.............",
+".........#####....###############.............",
+".........##.###..################.............",
+"........#########################.............",
+"......###########################.............",
+"..#################################...........",
+"#############################################.",
+"..############################################",
+"....######################################....",
+"......################################........",
+"........#########################.............",
+"..........###################.................",
+"............################...................",
+"..............#######..........................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+".............................................."]);
+const BIRD_DOWN = bmp([    // wing swept below body
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..........###..................................",
+".........#####.................................",
+".........##.###................................",
+"........#########..............................",
+"......################........................",
+"..#################################...........",
+"#############################################.",
+"..############################################",
+"....######################################....",
+"......#############################...........",
+"........#########################.............",
+"..........###############.....................",
+"............#############......................",
+".............############......................",
+"..............###########.....................",
+"...............##########.....................",
+"................#########.....................",
+".................########......................",
+"..................######........................",
+"...................#####........................",
+"....................####........................",
+".....................###........................",
+"......................##........................",
+"..............................................",
+"..............................................",
+"..............................................",
+".............................................."]);
+
+// Cloud 46×14
+const CLOUD = bmp([
+"..............################................",
+"...........###################...............",
+".........######..........######..............",
+"........####..................###.............",
+"......####......................####..........",
+"...#####..........................######......",
+"..###..................................###....",
+"..##....................................###...",
+"###......................................####.",
+"##..........................................##",
+"###############################################"]);
+
+// ── Canvas ───────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+const BODY_COL = '#535353';
+const BG_COL   = '#ffffff';
+
+// Pre-render sprites to offscreen canvases for fast blitting
+function renderSprite(b, col) {
+  const oc = document.createElement('canvas');
+  oc.width = b.w * SCALE; oc.height = b.h * SCALE;
+  const c2 = oc.getContext('2d');
+  c2.fillStyle = col || BODY_COL;
+  for (let y = 0; y < b.h; y++) {
+    const row = b.rows[y];
+    for (let x = 0; x < row.length; x++) {
+      if (row[x] === '#') c2.fillRect(x * SCALE, y * SCALE, SCALE, SCALE);
     }
   }
+  return oc;
 }
 
-function drawCactus(ob) {
-  ctx.fillStyle = COL.cactus;
-  const cfg = ob.cfg;
-  ctx.fillRect(ob.x, GROUND_Y - cfg.h, cfg.w, cfg.h);
-  // Arms
-  if (cfg.count >= 2) {
-    ctx.fillRect(ob.x - 6, GROUND_Y - cfg.h * 0.7, 6, cfg.h * 0.4);
-    ctx.fillRect(ob.x + cfg.w, GROUND_Y - cfg.h * 0.7, 6, cfg.h * 0.4);
-  }
+const SPR = {
+  body:     renderSprite(DINO_BODY),
+  legsA:    renderSprite(LEGS_RUN_A),
+  legsB:    renderSprite(LEGS_RUN_B),
+  legsStand:renderSprite(LEGS_STAND),
+  duck:     renderSprite(DINO_DUCK),
+  cactusS:  renderSprite(CACTUS_S),
+  cactusL:  renderSprite(CACTUS_L),
+  birdUp:   renderSprite(BIRD_UP),
+  birdDown: renderSprite(BIRD_DOWN),
+  cloud:    renderSprite(CLOUD, '#dadada'),
+};
+
+function blit(spr, gx, gy) {   // game coords → screen
+  ctx.drawImage(spr, Math.round(gx * SCALE), Math.round(gy * SCALE));
 }
 
-function drawBird(ob, frame) {
-  ctx.fillStyle = COL.bird;
-  const y = ob.y;
-  const x = ob.x;
-  // Body
-  ctx.fillRect(x + 10, y + 6, BIRD_W - 20, BIRD_H - 6);
-  // Beak
-  ctx.fillRect(x + BIRD_W - 10, y + 8, 10, 4);
-  // Wing (flapping)
-  if (frame < 0.5) {
-    ctx.fillRect(x + 6, y, BIRD_W - 12, 8);
-  } else {
-    ctx.fillRect(x + 6, y + BIRD_H - 4, BIRD_W - 12, 8);
-  }
-  // Eye
-  ctx.fillStyle = '#f7f7f7';
-  ctx.fillRect(x + BIRD_W - 18, y + 7, 5, 5);
-  ctx.fillStyle = COL.bird;
-  ctx.fillRect(x + BIRD_W - 16, y + 9, 3, 3);
-}
-
-function drawGround(offset) {
-  ctx.fillStyle = COL.ground;
-  ctx.fillRect(0, GROUND_Y, 800, 2);
-  // Ground bumps
-  for (let i = 0; i < 20; i++) {
-    const gx = ((i * 80 - offset) % 900) - 80;
-    ctx.fillRect(gx, GROUND_Y + 4, 12, 2);
-    ctx.fillRect(gx + 30, GROUND_Y + 6, 6, 2);
-  }
-}
-
-// ── Game state ───────────────────────────────────────────────────
-let dinoY      = GROUND_Y - DINO_H;
-let dinoVelY   = 0;
-let jumping    = false;
-let ducking    = false;
-let crashed    = false;
-let started    = false;
-let distanceRan= 0;
-let currentSpeed = 6;
-let highScore  = 0;
-let obstacles  = [];
+// ── Game state ───────────────────────────────────────────────────────
+let dinoY        = TREX_GROUND_Y;
+let jumpVelocity = 0;
+let jumping      = false;
+let ducking      = false;
+let speedDrop    = false;
+let crashed      = false;
+let started      = false;
+let distanceRan  = 0;        // displayed-score units (×0.025 like original meter)
+let rawDistance  = 0;        // original distanceRan units (speed/frame)
+let currentSpeed = INITIAL_SPEED;
+let highScore    = 0;
+let runningTime  = 0;        // ms since episode start (CLEAR_TIME gate)
+let obstacles    = [];       // {type, x, y, w, h, gap, group, speedOffset}
+let obstacleHistory = [];    // last spawned type names (duplication rule)
+let obstacleCount = 0;
+let clouds       = [{x: 200, y: 30}, {x: 480, y: 50}];
+let obstaclesCleared = 0;    // authoritative clear counter (RL reward source)
+let deathCause   = null;     // what killed the dino (RL diagnostics)
 let groundOffset = 0;
-let frameCount = 0;
-let legFrame   = 0;
-let wingFrame  = 0;
-let lastTime   = null;
-let nextObstacleIn = 80; // frames until next obstacle
-let obstacleCount  = 0;  // total obstacles spawned this episode
-let animId     = null;
+let legFrame     = 0;
+let wingFrame    = 0;
+let lastTime     = null;
+let animId       = null;
 
-const groundY  = GROUND_Y;
-
-// ── TRex interface ───────────────────────────────────────────────
+// ── TRex interface (driven by chrome_driver.py JS injection) ────────
 const tRex = {
-  get yPos()       { return dinoY; },
-  get jumping()    { return jumping; },
-  get ducking()    { return ducking; },
-  get jumpVelocity(){ return dinoVelY; },
+  get yPos()        { return dinoY; },
+  get jumping()     { return jumping; },
+  get ducking()     { return ducking; },
+  get jumpVelocity(){ return jumpVelocity; },
   startJump(speed) {
     if (!jumping && !crashed) {
-      jumping = true;
-      ducking = false;
-      dinoVelY = JUMP_VEL;
+      jumping      = true;
+      ducking      = false;
+      speedDrop    = false;
+      jumpVelocity = INITIAL_JUMP_VELOCITY - (speed || currentSpeed) / 10;
     }
   },
   setDuck(v) {
-    if (v && !jumping && !crashed) {
-      ducking = true;
-    } else if (!v) {
-      ducking = false;
+    if (crashed) return;
+    if (v) {
+      if (jumping) {
+        speedDrop = true;          // original: duck mid-air = fast fall
+      } else {
+        ducking = true;
+      }
+    } else {
+      ducking   = false;
+      speedDrop = false;
     }
   },
 };
 
-// ── Runner interface (matches game/chrome_driver.py expectations) ─
+// ── Runner interface ─────────────────────────────────────────────────
 const runner = {
-  get crashed()        { return crashed; },
-  get distanceRan()    { return distanceRan; },
-  get currentSpeed()   { return currentSpeed; },
-  get groundYPos()     { return groundY; },
-  get tRex()           { return tRex; },
-  get started()        { return started; },
-  set started(v)       { started = !!v; },
-  get activated()      { return started; },
-  set activated(v)     { started = !!v; },
+  get crashed()      { return crashed; },
+  get distanceRan()  { return distanceRan; },
+  get currentSpeed() { return currentSpeed; },
+  get obstaclesCleared() { return obstaclesCleared; },
+  get deathCause()   { return deathCause; },
+  get groundYPos()   { return TREX_GROUND_Y; },
+  get tRex()         { return tRex; },
+  get started()      { return started; },
+  set started(v)     { started = !!v; },
+  get activated()    { return started; },
+  set activated(v)   { started = !!v; },
 
   get horizon() {
     return {
       obstacles: obstacles.map(ob => ({
-        xPos:   ob.x,
-        yPos:   ob.y !== undefined ? ob.y : (GROUND_Y - ob.cfg.h),
-        width:  ob.cfg.w,
-        typeConfig: {
-          height: ob.cfg.h,
-          type:   ob.type,
-        },
-      }))
+        xPos:  ob.x,
+        yPos:  ob.y,
+        width: ob.w,
+        typeConfig: { height: ob.h, type: ob.type },
+      })),
     };
   },
 
   restart() {
     crashed      = false;
     distanceRan  = 0;
-    currentSpeed = 6;
-    dinoY        = GROUND_Y - DINO_H;
-    dinoVelY     = 0;
+    rawDistance  = 0;
+    currentSpeed = INITIAL_SPEED;
+    dinoY        = TREX_GROUND_Y;
+    jumpVelocity = 0;
     jumping      = false;
     ducking      = false;
+    speedDrop    = false;
+    runningTime  = 0;
     obstacles    = [];
-    nextObstacleIn = 80;
-    obstacleCount  = 0;
+    obstacleHistory = [];
+    obstacleCount   = 0;
+    obstaclesCleared = 0;
+    deathCause   = null;
     groundOffset = 0;
     started      = true;
-    if (!animId) loop(performance.now());
+    lastTime     = null;
+    if (!animId) animId = requestAnimationFrame(loop);
   },
 };
 
 window.Runner = { instance_: runner };
 
-// ── Obstacle generation ──────────────────────────────────────────
+// ── Keyboard (human play / demos) ────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'ArrowUp') {
+    e.preventDefault();
+    if (crashed) runner.restart();
+    else { started = true; tRex.startJump(currentSpeed); }
+  } else if (e.code === 'ArrowDown') {
+    e.preventDefault();
+    tRex.setDuck(true);
+  }
+});
+document.addEventListener('keyup', e => {
+  if (e.code === 'ArrowDown') tRex.setDuck(false);
+});
+
+// ── Obstacle spawning (original gap math) ────────────────────────────
+function gapFor(typeCfg, width, speed) {
+  const minGap = Math.round(width * speed + typeCfg.minGap * GAP_COEFFICIENT);
+  const maxGap = Math.round(minGap * MAX_GAP_COEFFICIENT);
+  return minGap + Math.floor(Math.random() * (maxGap - minGap));
+}
+
+function pickType() {
+  const names = ['CACTUS_SMALL', 'CACTUS_LARGE'];
+  if (ALLOW_BIRDS && currentSpeed >= OB_TYPES.PTERODACTYL.minSpeed) {
+    names.push('PTERODACTYL');
+  }
+  // Original duplication rule: max 2 identical in a row
+  let name, tries = 0;
+  do {
+    name = names[Math.floor(Math.random() * names.length)];
+    tries++;
+  } while (tries < 5 &&
+           obstacleHistory.length >= MAX_OBSTACLE_DUPLICATION &&
+           obstacleHistory.slice(-MAX_OBSTACLE_DUPLICATION).every(n => n === name));
+  return name;
+}
+
 function spawnObstacle() {
-  obstacleCount += 1;
-  // Phase 1: no birds — model learns to jump over cacti only.
-  // Phase 2: change to: obstacleCount >= 5 && Math.random() < 0.30
-  const useBird = false;
-  if (useBird) {
+  const name = pickType();
+  const cfg  = OB_TYPES[name];
+  obstacleCount++;
+
+  if (name === 'PTERODACTYL') {
+    const y = cfg.yPositions[Math.floor(Math.random() * cfg.yPositions.length)];
     obstacles.push({
-      type: 'PTERODACTYL',
-      x: 850,
-      y: BIRD_Y_OPTIONS[Math.floor(Math.random() * BIRD_Y_OPTIONS.length)],
-      cfg: { w: BIRD_W, h: BIRD_H },
+      type: name, x: W, y, w: cfg.w, h: cfg.h,
+      gap: gapFor(cfg, cfg.w, currentSpeed),
+      speedOffset: Math.random() > 0.5 ? cfg.speedOffset : -cfg.speedOffset,
+      group: 1,
     });
   } else {
-    const cfg = CACTI_CONFIGS[Math.floor(Math.random() * CACTI_CONFIGS.length)];
-    obstacles.push({ type: 'CACTUS_LARGE', x: 850, cfg });
+    // Group size: original allows multiples once speed > multipleSpeed
+    let group = 1;
+    if (currentSpeed > cfg.multipleSpeed) {
+      group = 1 + Math.floor(Math.random() * MAX_OBSTACLE_LENGTH);
+    }
+    const w = cfg.w * group;
+    obstacles.push({
+      type: name, x: W, y: cfg.yPos, w, h: cfg.h,
+      gap: gapFor(cfg, w, currentSpeed),
+      speedOffset: 0,
+      group,
+    });
   }
-  nextObstacleIn = 60 + Math.random() * 80;
+  obstacleHistory.push(name);
+  if (obstacleHistory.length > 4) obstacleHistory.shift();
 }
 
-// ── Collision ────────────────────────────────────────────────────
+// ── Collision (effective boxes tuned to reproduce original behavior) ─
+//   low bird (y=100): hits both standing & ducking → must jump
+//   mid bird (y=75):  hits standing, clears ducking → must duck
+//   high bird (y=50): clears standing → run under
 function checkCollision() {
-  const dh = ducking ? DINO_DUCK_H : DINO_H;
-  const dy = ducking ? GROUND_Y - DINO_DUCK_H : dinoY;
-  const dRight = DINO_X + DINO_W - 8;
-  const dBottom = dy + dh - 4;
+  let dx, dy, dw, dh;
+  if (ducking) {
+    dx = TREX.X + 2;  dy = GROUND_LINE - TREX.H_DUCK;
+    dw = TREX.W_DUCK - 8;  dh = TREX.H_DUCK;
+  } else {
+    dx = TREX.X + 6;  dy = dinoY + 2;
+    dw = TREX.W - 14;  dh = TREX.H - 4;
+  }
 
   for (const ob of obstacles) {
-    const obRight  = ob.x + ob.cfg.w;
-    const obTop    = ob.type === 'PTERODACTYL' ? ob.y : (GROUND_Y - ob.cfg.h);
-    const obBottom = ob.type === 'PTERODACTYL' ? ob.y + BIRD_H : GROUND_Y;
-
-    if (dRight > ob.x + 4 && DINO_X + 8 < obRight &&
-        dBottom > obTop + 4 && dy < obBottom) {
-      return true;
+    let ox, oy, ow, oh;
+    if (ob.type === 'PTERODACTYL') {
+      ox = ob.x + 12; oy = ob.y + 10;
+      ow = ob.w - 24; oh = ob.h - 18;
+    } else {
+      ox = ob.x + 2;  oy = ob.y + 2;
+      ow = ob.w - 4;  oh = ob.h - 2;
+    }
+    if (dx < ox + ow && dx + dw > ox && dy < oy + oh && dy + dh > oy) {
+      if (ob.type === 'PTERODACTYL') {
+        const label = {100: 'low', 75: 'mid', 50: 'high'}[ob.y] || '?';
+        return 'bird_' + label;
+      }
+      return ob.type.toLowerCase();
     }
   }
-  return false;
+  return null;
 }
 
-// ── Update ───────────────────────────────────────────────────────
+// ── Update (dt-based, original frame normalisation) ─────────────────
 function update(dt) {
   if (crashed || !started) return;
 
-  const speedFactor = currentSpeed / 6;
+  const fe = dt / MS_PER_FRAME;      // framesElapsed — original normalisation
+  runningTime += dt;
 
-  // Physics
+  // Jump physics (original updateJump)
   if (jumping) {
-    dinoVelY += GRAVITY;
-    dinoY    += dinoVelY;
-    if (dinoY >= GROUND_Y - DINO_H) {
-      dinoY    = GROUND_Y - DINO_H;
-      dinoVelY = 0;
-      jumping  = false;
+    const mult = speedDrop ? SPEED_DROP_COEFFICIENT : 1;
+    dinoY        += jumpVelocity * mult * fe;
+    jumpVelocity += GRAVITY * fe;
+    // Cap ascent once max height reached (original endJump behavior)
+    if (dinoY < MAX_JUMP_Y && jumpVelocity < DROP_VELOCITY) {
+      jumpVelocity = DROP_VELOCITY;
+    }
+    if (dinoY >= TREX_GROUND_Y) {
+      dinoY        = TREX_GROUND_Y;
+      jumpVelocity = 0;
+      jumping      = false;
+      speedDrop    = false;
     }
   }
 
-  // Move obstacles
+  // Obstacles move at game speed (+ bird offset); count clears on pass
   for (const ob of obstacles) {
-    ob.x -= currentSpeed;
+    ob.x -= (currentSpeed + (ob.speedOffset || 0)) * fe;
+    if (!ob.counted && ob.x + ob.w < TREX.X) {
+      ob.counted = true;
+      obstaclesCleared++;
+    }
   }
-  obstacles = obstacles.filter(ob => ob.x > -100);
+  obstacles = obstacles.filter(ob => ob.x + ob.w > -10);
 
-  // Spawn
-  nextObstacleIn -= 1;
-  if (nextObstacleIn <= 0) spawnObstacle();
+  // Spawn: original horizon logic — first obstacle after CLEAR_TIME,
+  // then each next when the gap behind the last one has scrolled in.
+  if (runningTime > CLEAR_TIME) {
+    if (obstacles.length === 0) {
+      spawnObstacle();
+    } else {
+      const last = obstacles[obstacles.length - 1];
+      if (W - (last.x + last.w) > last.gap) spawnObstacle();
+    }
+  }
 
-  // Distance & speed
-  distanceRan  += currentSpeed * 0.025;
-  currentSpeed  = Math.min(6 + distanceRan * 0.001, 13);
-  groundOffset  = (groundOffset + currentSpeed) % 80;
+  // Distance & speed (original: distance += speed·fe, accel per frame)
+  rawDistance += currentSpeed * fe;
+  distanceRan  = rawDistance * 0.025;          // displayed-score units
+  if (currentSpeed < MAX_SPEED) {
+    currentSpeed = Math.min(MAX_SPEED, currentSpeed + ACCELERATION * fe);
+  }
 
-  // Animation frames
-  legFrame  = (legFrame + 0.12 * speedFactor) % 1;
-  wingFrame = (wingFrame + 0.1)  % 1;
-  frameCount++;
+  groundOffset = (groundOffset + currentSpeed * fe) % 60;
+  legFrame  = (legFrame  + fe / 6) % 1;     // original run anim ~12fps
+  wingFrame = (wingFrame + fe / 12) % 1;    // bird flap slower
 
-  // Collision
-  if (checkCollision()) {
+  // Clouds drift at fraction of speed
+  for (const cl of clouds) {
+    cl.x -= currentSpeed * 0.2 * fe;
+    if (cl.x < -50) { cl.x = W + 30; cl.y = 20 + Math.random() * 40; }
+  }
+
+  const cause = checkCollision();
+  if (cause !== null) {
     crashed = true;
+    deathCause = cause;
     if (distanceRan > highScore) highScore = distanceRan;
   }
 }
 
-// ── Draw ─────────────────────────────────────────────────────────
-function draw() {
-  ctx.clearRect(0, 0, 800, 300);
-  ctx.fillStyle = '#f7f7f7';
-  ctx.fillRect(0, 0, 800, 300);
+// ── Draw ─────────────────────────────────────────────────────────────
+function drawGround() {
+  ctx.fillStyle = BODY_COL;
+  ctx.fillRect(0, (GROUND_LINE + 1) * SCALE, W * SCALE, SCALE);
+  // texture bumps
+  for (let i = 0; i < 16; i++) {
+    const gx = ((i * 60 - groundOffset) % (W + 60)) - 30;
+    ctx.fillRect(gx * SCALE, (GROUND_LINE + 4) * SCALE, 8 * SCALE, SCALE);
+    ctx.fillRect((gx + 22) * SCALE, (GROUND_LINE + 6) * SCALE, 4 * SCALE, SCALE);
+  }
+}
 
-  drawGround(groundOffset);
+function drawScore() {
+  const hi  = String(Math.floor(highScore)).padStart(5, '0');
+  const cur = String(Math.floor(distanceRan)).padStart(5, '0');
+  ctx.fillStyle = '#737373';
+  ctx.font = `bold ${11 * SCALE}px monospace`;
+  ctx.textAlign = 'right';
+  ctx.fillText(`HI ${hi} ${cur}`, (W - 10) * SCALE, 18 * SCALE);
+  ctx.textAlign = 'left';
+}
 
-  if (!started && !crashed) {
-    // Welcome screen
-    ctx.fillStyle = '#535353';
-    ctx.font = 'bold 16px monospace';
-    ctx.fillText('SEND A MESSAGE TO START TRAINING', 200, 150);
-    drawDino(DINO_X, GROUND_Y - DINO_H, false, 0);
+function drawDino() {
+  if (ducking && !jumping) {
+    blit(SPR.duck, TREX.X, GROUND_LINE - TREX.H_DUCK);
     return;
   }
+  blit(SPR.body, TREX.X, dinoY);
+  const legs = jumping ? SPR.legsStand
+             : (legFrame < 0.5 ? SPR.legsA : SPR.legsB);
+  blit(legs, TREX.X, dinoY + 33);
+}
+
+function drawObstacle(ob) {
+  if (ob.type === 'PTERODACTYL') {
+    blit(wingFrame < 0.5 ? SPR.birdUp : SPR.birdDown, ob.x, ob.y);
+  } else {
+    const spr = ob.type === 'CACTUS_SMALL' ? SPR.cactusS : SPR.cactusL;
+    const unit = OB_TYPES[ob.type].w;
+    for (let i = 0; i < ob.group; i++) {
+      blit(spr, ob.x + i * unit, ob.y);
+    }
+  }
+}
+
+function draw() {
+  ctx.fillStyle = BG_COL;
+  ctx.fillRect(0, 0, W * SCALE, H * SCALE);
+
+  for (const cl of clouds) blit(SPR.cloud, cl.x, cl.y);
+  drawGround();
+  for (const ob of obstacles) drawObstacle(ob);
+  drawDino();
+  drawScore();
 
   if (crashed) {
     ctx.fillStyle = '#535353';
-    ctx.font = 'bold 20px monospace';
-    ctx.fillText('G A M E  O V E R', 300, 130);
-    ctx.font = '13px monospace';
-    ctx.fillText('(auto-restart in training mode)', 270, 155);
-    drawDino(DINO_X, GROUND_Y - DINO_H, false, 0);
-    updateScoreEl();
-    return;
+    ctx.font = `bold ${12 * SCALE}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.fillText('G A M E  O V E R', (W / 2) * SCALE, 55 * SCALE);
+    ctx.textAlign = 'left';
+  } else if (!started) {
+    ctx.fillStyle = '#535353';
+    ctx.font = `${10 * SCALE}px monospace`;
+    ctx.fillText('Press SPACE or send a jump to start', 180 * SCALE, 60 * SCALE);
   }
-
-  // Obstacles
-  for (const ob of obstacles) {
-    if (ob.type === 'PTERODACTYL') {
-      drawBird(ob, wingFrame);
-    } else {
-      drawCactus(ob);
-    }
-  }
-
-  // Dino
-  const dy = ducking ? GROUND_Y - DINO_DUCK_H : dinoY;
-  drawDino(DINO_X, dy, ducking, legFrame);
-
-  updateScoreEl();
 }
 
-function updateScoreEl() {
-  const hi  = String(Math.floor(highScore)).padStart(5, '0');
-  const cur = String(Math.floor(distanceRan)).padStart(5, '0');
-  document.getElementById('score').textContent = `HI ${hi}  ${cur}`;
-}
-
-// ── Main loop ────────────────────────────────────────────────────
+// ── Main loop ────────────────────────────────────────────────────────
 function loop(ts) {
-  const dt = lastTime ? Math.min((ts - lastTime) / 1000, 0.05) : 0.016;
+  const dt = lastTime !== null ? Math.min(ts - lastTime, 100) : MS_PER_FRAME;
   lastTime = ts;
   update(dt);
   draw();
   animId = requestAnimationFrame(loop);
 }
 
-// ── Auto-start (RL trainer drives the game via JS injection) ────
+// Auto-start: the RL trainer drives the game via JS injection.
 started = true;
 animId  = requestAnimationFrame(loop);
 

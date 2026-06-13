@@ -1,13 +1,21 @@
 """Entry point.
 
-Usage:
-    python main.py                                                # genetic, 100 generations, 50 agents
-    python main.py --agent dqn --episodes 1000                    # DQN, logs to runs/dqn_<timestamp>/
-    python main.py --agent dqn --load runs/dqn_X/best_model.pt   # resume from checkpoint
-    python main.py --agent genetic --generations 200 --population 30
-    python main.py --agent genetic --workers 4                    # 4 parallel Chrome windows
+The two commands you actually need:
+    python main.py --agent dqn --episodes 5000      # start curriculum training
+    python main.py --agent dqn --auto               # resume after ANY stop
+                                                    # (crash, Ctrl+C, reboot)
+
+The curriculum advances phases, recovers from stalls, and checkpoints
+automatically — see curriculum.py. Progress: http://localhost:8765
+
+Other modes:
+    python main.py                                                # genetic, 100 generations
+    python main.py --agent dqn --no-curriculum                    # flat training, full game
+    python main.py --agent dqn --load runs/dqn_X/best_model.pt    # start from given weights
+    python main.py --agent genetic --workers 4                    # parallel Chrome windows
     python main.py --headless                                     # no browser window (faster)
-    python main.py --demo --load runs/dqn_X/best_model.pt        # watch best model play (no training)
+    python main.py --demo --load runs/dqn_X/best_model.pt         # watch best model (no training)
+    python main.py --cleanup                                      # kill orphaned Chrome processes
 """
 
 import argparse
@@ -42,10 +50,65 @@ def _open_drivers(n: int, headless: bool) -> list[DinoDriver]:
 
 
 def run_genetic(args):
+    """Sim-based genetic training (default). Use --browser for the legacy
+    Selenium implementation."""
     cfg = {**GENETIC_CONFIG}
     if args.population:
         cfg["population_size"] = args.population
 
+    if args.browser:
+        return _run_genetic_browser(args, cfg)
+
+    from datetime import datetime
+    from pathlib import Path
+    from agents.genetic.sim_trainer import SimGeneticTrainer
+    from curriculum import Curriculum
+    from visualization.web_dashboard import DashboardServer
+
+    curriculum = None if args.no_curriculum else Curriculum()
+
+    # Resume (--auto): newest genetic run with a state.json
+    run_dir, start_gen = None, 0
+    if args.auto:
+        base = Path("runs")
+        candidates = [d for d in base.glob("genetic_*")
+                      if (d / "state.json").exists()] if base.exists() else []
+        if candidates:
+            run_dir = str(max(candidates, key=lambda d: (d / "state.json").stat().st_mtime))
+            print(f"Resuming: {run_dir}")
+    if run_dir is None:
+        run_dir = f"runs/genetic_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        print(f"Run dir: {run_dir}")
+
+    web = DashboardServer()
+    web.start()
+
+    trainer = SimGeneticTrainer(
+        generations=args.generations,
+        cfg=cfg,
+        curriculum=curriculum,
+        run_dir=run_dir,
+        on_generation_end=lambda s: (
+            print(f"gen {s['generation']:>4} | best {s['score']:>7.1f} | "
+                  f"avg {s['avg_fitness']:>7.1f} | eval {s['eval_avg']:>7.1f} | "
+                  f"phase {s['phase']} | mut {s['mutation_scale']:.3f} | "
+                  f"cap {s['fitness_cap']} | {s['gen_seconds']:.1f}s/gen"
+                  + (f" | deaths {s['eval_death_causes']}" if s.get('eval_death_causes') else "")),
+            web.push(s),
+        ),
+    )
+    if args.auto:
+        trainer.start_generation = trainer.load_state()
+        if trainer.start_generation:
+            print(f"Resumed at generation {trainer.start_generation}")
+
+    trainer.train()
+    print(f"\nDone. Best champion eval: {trainer.best_eval:.1f}")
+    print(f"Champion genome: {run_dir}/best_genome.npz")
+
+
+def _run_genetic_browser(args, cfg):
+    """Legacy: evolution against the live browser game."""
     n_workers = max(1, min(args.workers, cfg["population_size"]))
     print(f"Opening {n_workers} Chrome window(s) in parallel...")
     drivers = _open_drivers(n_workers, args.headless)
@@ -67,64 +130,91 @@ def run_genetic(args):
             d.close()
 
     if pop is not None:
-        label = "Training complete" if not pop else "Stopped early"
-        print(f"\n{label}. Best score: {pop.best_ever:.1f}")
+        print(f"\nDone. Best score: {pop.best_ever:.1f}")
 
 
 def run_dqn(args):
     cfg = {**DQN_CONFIG}
 
-    from logger import RunLogger
+    from logger import RunLogger, find_latest_run
     from agents.dqn.trainer import DQNTrainer
+    from curriculum import Curriculum
     from visualization.web_dashboard import DashboardServer
+
+    # ── Resume (--auto): newest run with a state.json picks up mid-phase ──
+    resume_dir, start_episode, load_path = None, 0, args.load
+    curriculum = None if args.no_curriculum else Curriculum()
+
+    if args.auto:
+        latest = find_latest_run()
+        if latest is None:
+            print("No resumable run found — starting fresh.")
+        else:
+            resume_dir = str(latest)
+            checkpoint = latest / "checkpoint.pt"
+            if checkpoint.exists():
+                load_path = str(checkpoint)
 
     web = DashboardServer()
     web.start()   # http://localhost:8765  (daemon thread — auto-stops with process)
 
-    driver = DinoDriver(headless=args.headless)
-    with RunLogger(agent="dqn", cfg=cfg) as log:
-        try:
-            with DQNDashboard() as dash:
-                def on_ep_end(stats):
-                    dash.update(stats)   # Rich terminal dashboard
-                    web.push(stats)      # Web dashboard
+    # Training is pure simulation — no Chrome, no game server needed.
+    with RunLogger(agent="dqn", cfg=cfg, resume_dir=resume_dir) as log:
+        # Restore curriculum + counters from state.json after logger exists
+        if resume_dir:
+            state = log.load_state()
+            if state:
+                start_episode = state.get("episode", 0)
+                if curriculum is not None and state.get("curriculum"):
+                    curriculum = Curriculum.from_dict(state["curriculum"])
+                    print(f"Resuming at episode {start_episode}, "
+                          f"phase '{curriculum.phase.name if not curriculum.finished else 'done'}' "
+                          f"({curriculum.evals_in_phase} evals in)")
 
-                trainer = DQNTrainer(
-                    episodes=args.episodes,
-                    on_episode_end=on_ep_end,
-                    cfg=cfg,
-                    logger=log,
-                    checkpoint_every=args.checkpoint,
-                    load_path=args.load,
-                )
-                trainer.train(driver)
+        with DQNDashboard() as dash:
+            def on_ep_end(stats):
+                dash.update(stats)   # Rich terminal dashboard
+                web.push(stats)      # Web dashboard
 
-            print(f"\nTraining complete. Best score: {trainer.best_score:.1f}")
-        finally:
-            driver.close()
+            trainer = DQNTrainer(
+                episodes=args.episodes,
+                on_episode_end=on_ep_end,
+                cfg=cfg,
+                logger=log,
+                checkpoint_every=args.checkpoint,
+                load_path=load_path,
+                curriculum=curriculum,
+                start_episode=start_episode,
+            )
+            trainer.train()
+
+        print(f"\nTraining complete. Best eval: {trainer.best_eval:.1f} "
+              f"(best training score: {trainer.best_score:.1f})")
 
 
 def run_demo(args):
     """Watch a saved model play with ε=0 — pure exploitation, visible browser, no training."""
     if not args.load:
         print("Error: --demo requires --load PATH")
-        print("  Example: python main.py --demo --load runs\\dqn_20260606_113028\\best_model.pt")
+        print("  DQN:     python main.py --demo --load runs/dqn_X/best_model.pt")
+        print("  Genetic: python main.py --demo --load runs/genetic_X/best_genome.npz")
         return
 
-    from agents.dqn.network import QNetwork
-    from logger import load_model
-
     cfg = {**DQN_CONFIG}
-    net = QNetwork(cfg["network_layers"])
-    load_model(net, args.load)
-    net.eval()
+    if args.load.endswith(".npz"):
+        from agents.genetic.sim_trainer import load_genome
+        net = load_genome(args.load)            # NumpyNet — same .predict() API
+    else:
+        from agents.dqn.network import QNetwork
+        from logger import load_model
+        net = QNetwork(cfg["network_layers"])
+        load_model(net, args.load)
+        net.eval()
     print(f"Loaded:  {args.load}")
     print("Mode:    demo (ε=0, no training, no buffer)")
     print("Control: Ctrl+C to stop\n")
 
-    poll       = cfg["poll_interval"]
-    close      = cfg.get("clearing_close_threshold", 0.25)
-    far        = cfg.get("clearing_far_threshold", 0.55)
+    poll       = GAME_CONFIG["poll_interval"]
     dbg_every  = getattr(args, "debug_steps", 0)
 
     _ACTIONS = {0: "noop", 1: "jump", 2: "duck"}
@@ -144,20 +234,21 @@ def run_demo(args):
                 continue
 
             obs            = state.to_array()
-            prev_obs1_dist = obs[0]
             ep_score       = 0.0
             ep_steps       = 0
             ep_cleared     = 0
-            debug_ep       = (ep == 1 and dbg_every > 0)
+            debug_ep       = (ep == 1 and dbg_every > 0
+                              and not args.load.endswith(".npz"))  # torch-only
 
-            for _ in range(cfg["max_steps_per_episode"]):
+            for _ in range(20_000):
                 # Debug: show what the network sees and decides
                 if debug_ep and ep_steps % dbg_every == 0:
                     import torch as _torch
                     with _torch.no_grad():
                         t  = _torch.from_numpy(obs).unsqueeze(0)
                         qv = net(t).squeeze(0).numpy()
-                    feat_names = ["d1","y1","w1","b1","d2","y2","b2","spd","dy","vy","jmp","duc","ttc"]
+                    feat_names = ["d1","y1","w1","b1","d2","y2","w2","b2",
+                                  "gap","spd","dy","vy","jmp","duc","ttc"]
                     feat_str = "  ".join(f"{n}={v:.2f}" for n, v in zip(feat_names, obs))
                     q_str    = "  ".join(f"{_ACTIONS[i]}={qv[i]:.3f}" for i in range(3))
                     chosen   = _ACTIONS[int(qv.argmax())]
@@ -172,16 +263,10 @@ def run_demo(args):
                 if next_state is None:
                     break
 
-                next_obs       = next_state.to_array()
-                curr_obs1_dist = next_obs[0]
-
-                if prev_obs1_dist < close and curr_obs1_dist > far:
-                    ep_cleared += 1
-
-                obs            = next_obs
-                prev_obs1_dist = curr_obs1_dist
-                ep_score       = next_state.score
-                ep_steps      += 1
+                obs        = next_state.to_array()
+                ep_score   = next_state.score
+                ep_cleared = next_state.cleared   # authoritative game counter
+                ep_steps  += 1
 
                 if next_state.crashed:
                     break
@@ -261,6 +346,22 @@ def main():
         default=100,
         metavar="N",
         help="Save a checkpoint every N episodes (default: 100)",
+    )
+    parser.add_argument(
+        "--auto",
+        action="store_true",
+        help="Resume the most recent DQN run (checkpoint + phase + epsilon) "
+             "and continue training. The one command to restart after any stop.",
+    )
+    parser.add_argument(
+        "--no-curriculum",
+        action="store_true",
+        help="Train on the full game with the base config, no phases.",
+    )
+    parser.add_argument(
+        "--browser",
+        action="store_true",
+        help="Genetic: use the legacy browser-based evaluation instead of the sim.",
     )
     parser.add_argument(
         "--demo",
