@@ -80,6 +80,46 @@ The trainer is self-driving:
 - **Resume** — `state.json` written every episode; full checkpoints include
   optimizer state. `--auto` continues exactly where the run died.
 
+## Two learners, same exam
+
+The genetic algorithm runs the **same sim, same env-shaped curriculum, and
+same fixed-seed greedy eval** as the DQN (`agents/genetic/sim_trainer.py`), so
+their `eval_avg` numbers are directly comparable. Both complete all four phases
+autonomously, with zero human intervention, and reach the same near-perfect
+ceiling.
+
+| | DQN | Genetic |
+|---|---|---|
+| Through curriculum | ~45 min | **~8 min** |
+| Units of learning (curriculum) | ~675 episodes | **~79 generations** (50 genomes × 3 eps) |
+| To eval ceiling | (through curriculum) | ~200 more generations |
+| Final champion eval | 11,087 (10-min timeout) | **11,087 (same)** |
+| Parameters | ~12,000 (dueling [15,128,64]) | **419** ([15,16,8,3]) |
+
+Both reach the **same ceiling**; the DQN gets there in fewer "lives" (per-step
+credit assignment vs one fitness scalar per genome per life), the GA gets
+through the curriculum far faster in wall-clock and in a tiny genome.
+
+> ⚠ **Measurement lesson.** An earlier GA run looked stuck at eval 3,413. That
+> was a *selection-saturation artifact*, not a capacity limit: a fixed
+> fitness-episode frame cap meant that once several genomes survived the whole
+> window they scored identically, so selection couldn't rank them and evolution
+> random-walked. The fix is an **adaptive fitness cap** that doubles whenever
+> the champion maxes out the window. See
+> `models/genetic_validated_20260612_fixed/README.md` for the full before/after.
+
+Validated checkpoints live in `models/`:
+
+- `models/validated_20260612/` — DQN champion (eval 11,087, browser-transfer confirmed)
+- `models/genetic_validated_20260612_fixed/` — GA champion (eval 11,087, adaptive cap)
+- `models/genetic_validated_20260612/` — first GA run (eval 3,413, **superseded** — fixed-cap artifact)
+
+```bash
+# Watch either champion play the real browser game
+python main.py --demo --load models/validated_20260612/best_model.pt
+python main.py --demo --load models/genetic_validated_20260612_fixed/best_genome.npz
+```
+
 ## Run artifacts
 
 ```
@@ -115,12 +155,14 @@ dino_rl/
 ├── cleanup.py                  # orphaned-process recovery
 ├── game/
 │   ├── dino.html               # faithful game clone (URL-param configurable)
-│   ├── chrome_driver.py        # Selenium wrapper + JS injection
-│   └── game_state.py           # 13-feature normalized state vector
+│   ├── dino_env.py             # Python sim mirror (~35k steps/sec) — train here
+│   ├── chrome_driver.py        # Selenium/Playwright wrapper + JS injection
+│   └── game_state.py           # 15-feature normalized state vector
 ├── agents/
 │   ├── neural_net.py           # numpy net (genetic)
 │   ├── genetic/                # population, selection, crossover, mutation
-│   └── dqn/                    # Double DQN: network, replay buffer, trainer
+│   │                           #   + sim_trainer.py (sim-based GA, shared curriculum)
+│   └── dqn/                    # Dueling DQN: network, n-step replay, trainer
 └── visualization/
     ├── dashboard.py            # Rich terminal dashboard
     └── web_dashboard.py        # http://localhost:8765 — charts + phase status

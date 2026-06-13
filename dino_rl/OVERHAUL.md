@@ -194,8 +194,28 @@ runs/dqn_<timestamp>/
 └── phase_<name>_complete.pt   # weights at each phase completion
 ```
 
+## Genetic algorithm — same discipline, applied to evolution
+
+The overhaul's measurement principles were ported to a sim-based genetic
+algorithm (`agents/genetic/sim_trainer.py`), which now shares the DQN's sim,
+env-shaped curriculum, and fixed-seed greedy eval. Two GA-specific points:
+
+- **Common random numbers.** Within a generation every genome is scored on the
+  *same* episode seeds, so selection compares policies, not obstacle-draw luck.
+  Seeds rotate each generation to prevent overfitting one sequence.
+- **Adaptive fitness cap.** Fitness episodes start with a short frame cap (fast
+  early generations) and the cap **doubles whenever the generation champion
+  times out** on most of its episodes. A *fixed* cap silently saturates
+  selection — once several genomes survive the whole window they score
+  identically and evolution random-walks. We hit exactly this (best fitness
+  pinned at the cap score for 60+ generations, eval stuck at 3,413); the
+  adaptive cap fixed it and the GA reached eval 11,087, matching the DQN. This
+  is the genetic analogue of §3: *the control signal, not just the report, has
+  to stay informative.*
+
 ## Invalidation note
 
 Checkpoints from before this overhaul are incompatible (15-feature input,
-dueling architecture, new game physics). Genetic mode remains browser-based
-as a legacy demo; its `network_layers` updated to 15 inputs.
+dueling architecture, new game physics). The genetic agent's `network_layers`
+were updated to 15 inputs; a legacy browser-based GA (`--agent genetic
+--browser`) is kept for demonstration, but the sim-based GA is the default.
