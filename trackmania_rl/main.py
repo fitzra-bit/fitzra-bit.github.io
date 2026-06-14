@@ -23,6 +23,12 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
+import torch
+# PyTorch defaults to all CPU threads, but inter-thread synchronization
+# dominates for tiny batches/networks — single thread is ~170x faster here.
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
+
 from config import SAC_CONFIG
 from curriculum import Curriculum
 from logger import RunLogger, find_latest_run
@@ -65,19 +71,26 @@ def run_training(args):
 
         def on_ep_end(stats):
             log.log(stats)
-            ep = stats["episode"]
-            if (ep + 1) % 10 == 0:
-                print(
+            ep   = stats["episode"]
+            # Print every episode during warm-up, then every 25
+            freq = 5 if ep < 200 else 25
+            if (ep + 1) % freq == 0 or "eval_avg_laps" in stats:
+                line = (
                     f"  ep {ep+1:>6} | "
                     f"reward {stats['reward']:>8.3f} | "
-                    f"laps {stats.get('laps', 0):>3} | "
+                    f"laps {stats.get('laps', 0):>2} | "
+                    f"prog {stats.get('progress', 0):.2f} | "
                     f"α {stats['alpha']:.3f} | "
+                    f"steps {stats['total_steps']:>8,} | "
                     f"phase {stats.get('phase', '-')}"
-                    + (
-                        f" | eval_laps {stats['eval_avg_laps']:.2f}"
-                        if "eval_avg_laps" in stats else ""
-                    )
                 )
+                if "eval_avg_laps" in stats:
+                    line += (
+                        f"\n  *** EVAL  avg_laps={stats['eval_avg_laps']:.2f} | "
+                        f"avg_progress={stats.get('eval_avg_progress', 0):.3f} | "
+                        f"avg_speed={stats.get('eval_avg_speed', 0):.1f} m/s ***"
+                    )
+                print(line)
 
         trainer = SACTrainer(
             episodes=args.episodes,

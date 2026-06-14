@@ -71,13 +71,15 @@ class CarEnv:
         domain_rand: bool = False,
         max_speed: Optional[float] = None,
         max_frames: int = 18_000,
+        speed_init_frac: float = 0.35,   # start at this fraction of max_speed
         seed: Optional[int] = None,
     ):
-        self.track_name  = track
-        self.domain_rand = domain_rand
-        self._speed_cap  = max_speed       # overrides physics default when set
-        self.max_frames  = max_frames
-        self._rng        = np.random.default_rng(seed)
+        self.track_name       = track
+        self.domain_rand      = domain_rand
+        self._speed_cap       = max_speed
+        self.max_frames       = max_frames
+        self._speed_init_frac = speed_init_frac
+        self._rng             = np.random.default_rng(seed)
         self._track: Track = TRACK_REGISTRY[track]()
         self._p: dict = {}                 # current episode physics params
 
@@ -158,7 +160,7 @@ class CarEnv:
         self.x     = float(wp0[0]) + float(noise_pos[0])
         self.y     = float(wp0[1]) + float(noise_pos[1])
         self.theta = float(np.arctan2(tangent[1], tangent[0])) + noise_angle
-        self.v     = 0.0
+        self.v     = self._p["max_speed"] * self._speed_init_frac
         self.steer_prev = self.accel_prev = 0.0
         self.frame       = 0
         self._progress_idx   = 0
@@ -195,6 +197,9 @@ class CarEnv:
                 self.laps += 1
             self._progress_idx    = wp_idx
             self._total_advanced += advanced
+
+        # Small per-step speed bonus so braking to zero is never optimal
+        reward += 0.001 * (self.v / self._p["max_speed"])
 
         # Off-track terminal
         off_track = abs(lat_off) > t.width

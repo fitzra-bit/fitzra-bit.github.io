@@ -28,25 +28,37 @@ class Phase:
 PHASES: List[Phase] = [
     Phase(
         name="0-straight",
-        env_params={"track": "straight", "domain_rand": False, "max_speed": 22.0},
+        env_params={
+            "track": "straight", "domain_rand": False,
+            "max_speed": 22.0, "max_frames": 3_600,   # 1 game-minute cap — keep episodes short
+        },
         complete_eval=0.85,
         description="Straight road, slow. Learn throttle/brake and lane-keeping.",
     ),
     Phase(
         name="1-oval",
-        env_params={"track": "oval", "domain_rand": False, "max_speed": 38.0},
+        env_params={
+            "track": "oval", "domain_rand": False,
+            "max_speed": 38.0, "max_frames": 9_000,   # 2.5 game-minutes
+        },
         complete_eval=3.0,
         description="Oval circuit. Learn proportional cornering.",
     ),
     Phase(
         name="2-slalom",
-        env_params={"track": "slalom", "domain_rand": False, "max_speed": 48.0},
+        env_params={
+            "track": "slalom", "domain_rand": False,
+            "max_speed": 48.0, "max_frames": 9_000,
+        },
         complete_eval=2.0,
         description="S-curve track. Learn anticipatory steering.",
     ),
     Phase(
         name="3-domain-rand",
-        env_params={"track": "slalom", "domain_rand": True},
+        env_params={
+            "track": "slalom", "domain_rand": True,
+            "max_frames": 12_000,
+        },
         complete_eval=2.0,
         stall_evals=35,
         description=(

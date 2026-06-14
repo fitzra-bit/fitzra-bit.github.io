@@ -61,16 +61,26 @@ class SACTrainer:
             N_OBS, N_ACT, self.cfg.get("buffer_size", 1_000_000)
         )
 
-        self.gamma      = self.cfg.get("gamma",       0.99)
-        self.tau        = self.cfg.get("tau",          0.005)
-        self.batch      = self.cfg.get("batch_size",   256)
-        self.min_buf    = self.cfg.get("min_buffer",   5_000)
-        self.eval_every = self.cfg.get("eval_every",   50)
-        self.eval_eps   = self.cfg.get("eval_episodes", 5)
+        self.gamma        = self.cfg.get("gamma",        0.99)
+        self.tau          = self.cfg.get("tau",           0.005)
+        self.batch        = self.cfg.get("batch_size",    256)
+        self.min_buf      = self.cfg.get("min_buffer",    5_000)
+        self.eval_every   = self.cfg.get("eval_every",    50)
+        self.eval_eps     = self.cfg.get("eval_episodes",  5)
+        self.update_every = self.cfg.get("update_every",   2)
 
         self.best_eval    = 0.0
         self.total_steps  = 0
         self._env         = self._make_env()
+
+        # Numpy inference cache — rebuilt after every update round to avoid
+        # 20ms-per-call PyTorch dispatch overhead during the training step loop
+        self.actor.build_numpy_cache()
+        # Exploration noise: decays from start to end over explore_decay_steps
+        self._explore_std_start = self.cfg.get("explore_std_start", 0.5)
+        self._explore_std_end   = self.cfg.get("explore_std_end",   0.05)
+        self._explore_decay     = self.cfg.get("explore_decay_steps", 200_000)
+        self.actor._explore_std = self._explore_std_start
 
     # ── environment ──────────────────────────────────────────────────────────
 
@@ -88,7 +98,7 @@ class SACTrainer:
 
     @property
     def alpha(self) -> float:
-        return float(self.log_alpha.exp())
+        return float(self.log_alpha.exp().detach())
 
     def _update(self) -> dict:
         if self.buffer.size < self.min_buf:
@@ -119,6 +129,9 @@ class SACTrainer:
         self.opt_alpha.zero_grad()
         alpha_loss.backward()
         self.opt_alpha.step()
+        # Floor: keep α ≥ 0.1 so policy never collapses to fully deterministic
+        with torch.no_grad():
+            self.log_alpha.clamp_(min=-2.3)
 
         # Soft target update
         for tp, p in zip(self.critic_t.parameters(), self.critic.parameters()):
@@ -169,23 +182,32 @@ class SACTrainer:
             ep_steps  = 0
 
             while not done:
-                # Random actions until buffer is warm
+                # Warm-up: pure random; after that: numpy inference (fast)
                 if self.buffer.size < self.min_buf:
                     action = self._rng_action()
                 else:
-                    with torch.no_grad():
-                        t_obs  = torch.from_numpy(obs).unsqueeze(0)
-                        action, _, _ = self.actor.sample(t_obs)
-                        action = action.squeeze(0).numpy()
+                    action = self.actor.predict_numpy(obs)
 
                 next_obs, reward, done, info = env.step(action)
-                # Don't mark terminal on timeout — only true off-track deaths
                 self.buffer.push(obs, action, reward, next_obs,
                                  float(done and not info["timeout"]))
-                update_info = self._update()
-                obs         = next_obs
-                ep_reward  += reward
-                ep_steps   += 1
+
+                if self.total_steps % self.update_every == 0:
+                    update_info = self._update()
+                    if update_info:
+                        # Rebuild numpy cache and decay explore noise
+                        self.actor.build_numpy_cache()
+                        frac = min(self.total_steps / max(self._explore_decay, 1), 1.0)
+                        self.actor._explore_std = (
+                            self._explore_std_start * (1 - frac)
+                            + self._explore_std_end * frac
+                        )
+                else:
+                    update_info = {}
+
+                obs          = next_obs
+                ep_reward   += reward
+                ep_steps    += 1
                 self.total_steps += 1
 
             # ── greedy eval every N episodes ──
@@ -240,10 +262,16 @@ class SACTrainer:
             if update_info:
                 stats.update(update_info)
 
+            # state.json written every episode for resume
             if self.logger:
-                self.logger.log(stats)
+                self.logger.save_state({
+                    "episode":     ep + 1,
+                    "best_eval":   self.best_eval,
+                    "total_steps": self.total_steps,
+                    "curriculum":  cur.to_dict() if cur else None,
+                })
             if self.on_episode_end:
-                self.on_episode_end(stats)
+                self.on_episode_end(stats)   # on_ep_end calls logger.log()
 
     @staticmethod
     def _rng_action() -> np.ndarray:
