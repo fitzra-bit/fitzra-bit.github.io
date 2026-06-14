@@ -1,0 +1,4 @@
+torch>=2.0.0
+numpy>=1.24.0
+matplotlib>=3.7.0   # demo / visualisation only
+# tminterface>=0.9.0  # uncomment when real-game phase is ready
