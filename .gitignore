@@ -13,3 +13,4 @@ venv/
 .DS_Store
 factory_chat/saved_scenarios/*.json
 dino_rl/runs/
+trackmania_rl/runs/
