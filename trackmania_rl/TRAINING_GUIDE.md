@@ -27,10 +27,12 @@ four-phase curriculum before being exported to the real Trackmania game.
 
 | Phase | Track | Max speed | Gate (avg_laps to pass) | What the agent learns |
 |-------|-------|-----------|-------------------------|------------------------|
-| 0-straight | 250 m straight | 22 m/s | 0.85 laps | Throttle, brake, stay on track |
-| 1-oval | 500 m oval | 38 m/s | 3.0 laps | Proportional cornering |
-| 2-slalom | 10-gate slalom | 48 m/s | 2.0 laps | Anticipatory steering |
-| 3-domain-rand | Slalom + randomised physics | 55 m/s | 2.0 laps | Generalization / sim-to-real |
+| 0-straight | 250 m straight (open) | 22 m/s | 0.85 (= 85% completion) | Throttle, brake, stay on track |
+| 1-oval | 500 m oval (closed) | 38 m/s | 3.0 laps | Proportional cornering |
+| 2-slalom | 10-gate slalom (open) | 48 m/s | 0.85 (= 85% completion) | Anticipatory steering |
+| 3-domain-rand | Slalom + randomised physics (open) | 55 m/s | 0.80 (= 80% completion) | Generalization / sim-to-real |
+
+Note: for open tracks (straight, slalom), the gate metric is `progress` not `laps`. The evaluation converts open-track progress to an effective-laps value using `eff_laps = laps + progress`.
 
 The gate is checked every 50 training episodes using **fixed-seed deterministic
 eval** (5 episodes, seeds 10000–10004). The agent advances only when eval, not

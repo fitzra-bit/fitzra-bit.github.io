@@ -51,7 +51,7 @@ PHASES: List[Phase] = [
             "track": "slalom", "domain_rand": False,
             "max_speed": 48.0, "max_frames": 9_000,
         },
-        complete_eval=2.0,
+        complete_eval=0.85,   # open track: eff_laps = progress; 0.85 = 85% through slalom
         description="S-curve track. Learn anticipatory steering.",
     ),
     Phase(
@@ -60,7 +60,7 @@ PHASES: List[Phase] = [
             "track": "slalom", "domain_rand": True,
             "max_frames": 12_000,
         },
-        complete_eval=2.0,
+        complete_eval=0.80,   # open track: 0.80 = 80% through slalom with randomised physics
         stall_evals=35,
         description=(
             "Randomised physics (friction, wheelbase, speed). "
