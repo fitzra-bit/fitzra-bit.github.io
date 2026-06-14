@@ -117,9 +117,22 @@ class SACTrainer:
         critic_loss.backward()
         self.opt_critic.step()
 
-        # Actor (freeze critic grads during actor update)
+        # Actor update with BC auxiliary loss during early training.
+        # SAC Q-gradient alone gets stuck (Q(forward→crash) < Q(brake→safe)),
+        # so we add a proportional-controller BC term that decays over 200k steps.
         new_a, log_pi, _ = self.actor.sample(s)
         actor_loss = (self.alpha * log_pi - self.critic.q_min(s, new_a)).mean()
+
+        bc_weight = max(0.0, 1.0 - self.total_steps / 200_000)
+        if bc_weight > 0.0:
+            # Proportional controller target: steer corrects heading+lateral, accel=0.45
+            # obs layout: [speed_norm, lat_norm, heading_err_norm, ...]
+            guided_steer = torch.clamp(-2.5 * s[:, 2] - 0.8 * s[:, 1], -1.0, 1.0)
+            guided_accel = torch.full((s.shape[0],), 0.45, device=s.device)
+            guided_a = torch.stack([guided_steer, guided_accel], dim=1)
+            bc_loss = F.mse_loss(new_a, guided_a)
+            actor_loss = actor_loss + bc_weight * bc_loss
+
         self.opt_actor.zero_grad()
         actor_loss.backward()
         self.opt_actor.step()
@@ -145,15 +158,23 @@ class SACTrainer:
     # ── greedy eval — keys ALL control decisions ──────────────────────────────
 
     def evaluate(self) -> dict:
-        """Fixed-seed deterministic evaluation — the single source of truth."""
+        """Fixed-seed deterministic evaluation — the single source of truth.
+
+        For closed tracks: avg_laps = integer lap count.
+        For open tracks (straight, slalom): avg_laps = progress fraction so
+        curriculum phase gates (avg_laps ≥ threshold) work uniformly.
+        """
         env = self._make_env()
+        closed = env._track.closed
         laps_all, prog_all, speed_all = [], [], []
         for i in range(self.eval_eps):
             obs  = env.reset(seed=10_000 + i)
             done = False
             while not done:
                 obs, _, done, info = env.step(self.actor.predict(obs))
-            laps_all.append(info["laps"])
+            # Unified metric: laps + fractional progress for open tracks
+            eff_laps = info["laps"] + (info["progress"] if not closed else 0.0)
+            laps_all.append(eff_laps)
             prog_all.append(info["progress"])
             speed_all.append(info["speed"])
         return {
@@ -161,6 +182,36 @@ class SACTrainer:
             "avg_progress": round(float(np.mean(prog_all)),  3),
             "avg_speed":    round(float(np.mean(speed_all)), 1),
         }
+
+    # ── BC pre-training ───────────────────────────────────────────────────────
+
+    def pretrain_bc(self, bc_steps: int = 2_000):
+        """Behavioural-cloning warm-start: clone the proportional controller.
+
+        Initialises the actor mean to match guided_action() output so the SAC
+        starts from a policy that can actually drive, not from random weights.
+        Q-function then evaluates a good initial policy → positive Q(forward).
+        """
+        print(f"  BC pre-training for {bc_steps} gradient steps …", flush=True)
+        env = self._make_env()
+        obs = env.reset(seed=0)
+        for step in range(bc_steps):
+            target = self._guided_action(obs)
+            obs_t  = torch.from_numpy(obs.astype(np.float32)).unsqueeze(0)
+            tgt_t  = torch.from_numpy(target).unsqueeze(0)
+
+            mean, _ = self.actor(obs_t)
+            bc_loss = F.mse_loss(torch.tanh(mean), tgt_t)
+            self.opt_actor.zero_grad()
+            bc_loss.backward()
+            self.opt_actor.step()
+
+            obs, _, done, _ = env.step(target)
+            if done:
+                obs = env.reset(seed=step)
+
+        self.actor.build_numpy_cache()
+        print("  BC pre-training done.", flush=True)
 
     # ── training loop ────────────────────────────────────────────────────────
 
@@ -174,6 +225,9 @@ class SACTrainer:
             print(f"    {ph.description}")
             print(f"    gate: avg_laps ≥ {ph.complete_eval}\n")
 
+        if self.start_episode == 0:
+            self.pretrain_bc()
+
         for ep in range(self.start_episode, self.start_episode + self.episodes):
             t0   = time.time()
             obs  = env.reset(seed=ep)
@@ -181,10 +235,16 @@ class SACTrainer:
             ep_reward = 0.0
             ep_steps  = 0
 
+            # 10% of post-warmup episodes use guided controller to keep buffer
+            # seeded with successful demonstrations, preventing Q-pessimism drift
+            _use_guided = (
+                self.buffer.size < self.min_buf
+                or ep % 10 == 0
+            )
+
             while not done:
-                # Warm-up: pure random; after that: numpy inference (fast)
-                if self.buffer.size < self.min_buf:
-                    action = self._rng_action()
+                if _use_guided:
+                    action = self._guided_action(obs)
                 else:
                     action = self.actor.predict_numpy(obs)
 
@@ -272,6 +332,25 @@ class SACTrainer:
                 })
             if self.on_episode_end:
                 self.on_episode_end(stats)   # on_ep_end calls logger.log()
+
+    @staticmethod
+    def _guided_action(obs: np.ndarray) -> np.ndarray:
+        """Proportional lane-keeping controller for buffer warm-up.
+
+        Drives straight at moderate speed with heading + lateral correction.
+        Fills the replay buffer with SUCCESSFUL forward-driving experiences so
+        the Q-function learns Q(forward) >> Q(braking) before SAC takes over.
+
+        obs layout: [speed_norm, lat_norm, heading_err_norm, curv×3, progress,
+                     steer_prev, accel_prev, wall_dist_norm]
+        """
+        lat_norm     = float(obs[1])
+        heading_norm = float(obs[2])
+        # Proportional correction: heading dominates, lateral is softer
+        steer = float(np.clip(-2.5 * heading_norm - 0.8 * lat_norm, -1.0, 1.0))
+        accel = 0.45
+        noise = np.random.randn(2) * np.array([0.08, 0.10])
+        return np.clip(np.array([steer, accel], dtype=np.float32) + noise, -1.0, 1.0)
 
     @staticmethod
     def _rng_action() -> np.ndarray:

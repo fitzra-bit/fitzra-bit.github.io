@@ -82,24 +82,31 @@ class Actor(nn.Module):
                         layer.weight.numpy().T.copy(),  # (in, out)
                         layer.bias.numpy().copy(),
                     ))
-            self._np_mean_W   = self.mean.weight.numpy().T.copy()
-            self._np_mean_b   = self.mean.bias.numpy().copy()
+            self._np_mean_W  = self.mean.weight.numpy().T.copy()
+            self._np_mean_b  = self.mean.bias.numpy().copy()
+            self._np_lstd_W  = self.log_std.weight.numpy().T.copy()
+            self._np_lstd_b  = self.log_std.bias.numpy().copy()
 
     def predict_numpy(self, obs: np.ndarray) -> np.ndarray:
         """Stochastic action via cached numpy weights (~0.1ms vs 20ms torch).
 
-        Returns tanh(mean + noise) where noise ~ N(0, explore_std).
-        Used for environment interaction during training; the grad-bearing
-        actor.sample() is still used for the SAC actor-loss update.
+        Mirrors actor.sample() exactly: samples from N(mean, exp(log_std)) in
+        pre-tanh space, then applies tanh. This keeps buffer experiences
+        consistent with the policy distribution the SAC updates assume.
+        explore_std acts as a temperature multiplier (decays from start to end).
         """
         x = obs.astype(np.float32)
         for W, b in self._np_cache:
             x = np.maximum(0.0, x @ W + b)          # ReLU hidden
-        mean = np.tanh(x @ self._np_mean_W + self._np_mean_b)
-        # Exploration noise (decaying scale managed by caller)
+        mean    = x @ self._np_mean_W + self._np_mean_b
+        log_std = np.clip(x @ self._np_lstd_W + self._np_lstd_b,
+                          LOG_STD_MIN, LOG_STD_MAX)
+        std = np.exp(log_std)
+        # Temperature multiplier: explore_std decays 0.5→0.05, giving 1.5x→1.05x variance
         if hasattr(self, '_explore_std') and self._explore_std > 0:
-            mean = mean + self._explore_std * np.random.randn(*mean.shape)
-        return np.clip(mean, -1.0, 1.0).astype(np.float32)
+            std = std * (1.0 + self._explore_std)
+        x_t = mean + std * np.random.randn(*mean.shape)
+        return np.tanh(x_t).astype(np.float32)
 
 
 class Critic(nn.Module):

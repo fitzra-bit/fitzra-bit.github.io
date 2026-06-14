@@ -31,6 +31,7 @@ PHASES: List[Phase] = [
         env_params={
             "track": "straight", "domain_rand": False,
             "max_speed": 22.0, "max_frames": 3_600,   # 1 game-minute cap — keep episodes short
+            "speed_init_frac": 0.55,                   # start at 55% max speed for early signal
         },
         complete_eval=0.85,
         description="Straight road, slow. Learn throttle/brake and lane-keeping.",

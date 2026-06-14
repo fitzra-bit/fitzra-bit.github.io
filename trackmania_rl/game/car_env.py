@@ -160,7 +160,9 @@ class CarEnv:
         self.x     = float(wp0[0]) + float(noise_pos[0])
         self.y     = float(wp0[1]) + float(noise_pos[1])
         self.theta = float(np.arctan2(tangent[1], tangent[0])) + noise_angle
-        self.v     = self._p["max_speed"] * self._speed_init_frac
+        self.v     = self._p["max_speed"] * self._speed_init_frac * (
+            0.7 + 0.3 * float(self._rng.random())   # randomise init speed [0.7x, 1.0x] of frac
+        )
         self.steer_prev = self.accel_prev = 0.0
         self.frame       = 0
         self._progress_idx   = 0
@@ -201,10 +203,11 @@ class CarEnv:
         # Small per-step speed bonus so braking to zero is never optimal
         reward += 0.001 * (self.v / self._p["max_speed"])
 
-        # Off-track terminal
+        # Off-track terminal.  Penalty kept small so Q(forward→crash) stays
+        # positive even early in training (avoids the "brake is always safe" trap).
         off_track = abs(lat_off) > t.width
         if off_track:
-            reward -= 1.0
+            reward -= 0.2
 
         timeout = self.frame >= self.max_frames
         done    = off_track or timeout

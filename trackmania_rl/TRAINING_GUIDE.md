@@ -190,9 +190,9 @@ when you want to restart curriculum after a partial convergence.
 | `target_entropy` | -1.0 | SAC entropy target. Higher = more exploration retained |
 | `min_buffer` | 2000 | Steps of random data before learning starts |
 | `eval_every` | 50 | Episodes between greedy evals. Lower = more frequent but slower |
-| `explore_std_start` | 0.5 | Action noise at step 0 |
-| `explore_std_end` | 0.05 | Action noise floor |
-| `explore_decay_steps` | 500000 | Steps to decay explore noise to floor |
+| `explore_std_start` | 0.5 | Exploration temperature multiplier at step 0 (std × 1.5) |
+| `explore_std_end` | 0.05 | Temperature multiplier floor (std × 1.05 at convergence) |
+| `explore_decay_steps` | 500000 | Steps to decay temperature multiplier to floor |
 
 **α floor**: The `log_alpha` is clamped at −2.3 in `trainer.py`, keeping α ≥ 0.1
 regardless of the `target_entropy` setting. This prevents the "stand-still" local

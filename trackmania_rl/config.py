@@ -8,11 +8,11 @@ SAC_CONFIG: dict = {
     "lr":              3e-4,
     "gamma":           0.99,
     "tau":             0.005,       # soft target update coefficient
-    "target_entropy":  -1.0,        # H* target; -1 keeps moderate entropy (was -2 → α→0)
+    "target_entropy":   0.0,        # H* = 0 → std ≈ 0.4/dim; enough exploration pre-convergence
 
     # Replay
     "buffer_size":     500_000,
-    "min_buffer":      2_000,       # warm-up: random actions until this full
+    "min_buffer":      5_000,       # warm-up: guided actions until this full (see trainer._guided_action)
     "batch_size":      256,
 
     # Episode / eval
