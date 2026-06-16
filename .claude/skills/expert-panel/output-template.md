@@ -19,9 +19,16 @@ decision-useful — cut anything that doesn't change what the reader does next.
 - **Constraints**: budget / time / regulatory / technical / political …
 - **Key assumptions**: …
 - **Unknowns that matter**: …
+- **Considerations sweep** (mark live / not live; note if unowned):
+  - IP & ownership: …
+  - Data sovereignty & government compliance: …
+  - Customer & personal data: …
+  - Change velocity & obsolescence: …
 - **Mode**: <quick pass | full treatment> and any personas added/dropped + why.
 
 ## 2. Panel weighting
+Score the full roster; bench rows that score 0 can be dropped from the table.
+
 | Persona | Weight (0–3) | Why this weight here |
 |---|---|---|
 | CIO | | |
@@ -32,6 +39,12 @@ decision-useful — cut anything that doesn't change what the reader does next.
 | Infrastructure | | |
 | Operations | | |
 | Consultant | | |
+| CDAIO | | |
+| Privacy / Customer-Data | | |
+| IP Counsel | | |
+| Gov / Reg Compliance | | |
+| Change-Velocity | | |
+| _other bench (CFO, EA, Change mgmt)_ | | |
 
 ## 3. Independent positions
 For each persona with weight ≥ 1:

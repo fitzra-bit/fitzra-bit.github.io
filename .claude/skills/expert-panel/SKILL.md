@@ -33,8 +33,12 @@ answer, or tasks that are pure execution. Say so and answer directly instead.
 
 ## The panel
 
-Eight personas. Full definitions — mandate, primary fear, biases, deal-breakers,
-reflexive questions — are in `personas.md`. **Read that file before running.**
+Two tiers. The **core panel** is the default cast; the **extended bench** is
+pulled in by relevance so you're not running every brief on every problem. Full
+definitions — mandate, primary fear, biases, deal-breakers, reflexive questions —
+are in `personas.md`. **Read that file before running.**
+
+### Core panel
 
 | Persona | One-line mandate |
 |---|---|
@@ -47,10 +51,44 @@ reflexive questions — are in `personas.md`. **Read that file before running.**
 | Operations | Keep it running day-to-day; supportability and toil |
 | Independent consultant (Bain-style) | Objective outside view, benchmarks, challenge the internal consensus |
 
-The panel is the **default**, not a fixed cast. For a given problem you may
-down-weight personas to near-zero, or add one (common additions: CFO/Finance,
-Data/Privacy officer, Enterprise Architecture, End-users/Change management). If
-you add or drop personas, say so and why in the framing step.
+### Extended bench (pull in by relevance)
+
+| Persona | One-line mandate |
+|---|---|
+| CDAIO (Chief Data & AI Officer) | Data as an asset and AI value/adoption; counterweight to the CIO's delivery/risk view |
+| Privacy / Customer-Data Officer | Speak for the data subject — consent, PII, residency, retention, customer trust |
+| IP Counsel | Protect and own IP — model outputs, training-data rights, OSS licenses, vendor indemnity |
+| Government / Regulatory Compliance | Sovereign and public-sector obligations — residency, gov-cloud, sector regimes |
+| Change-Velocity / Transformation lead | Pace of adoption; the cost of moving too slow; counterweight to the conservative voices |
+| CFO / Finance | Capital allocation, ROI/payback, opex vs. capex |
+| Enterprise Architecture | Cross-portfolio coherence and roadmap fit, longer horizon than Infra |
+| End-users / Change management | Adoption, training, workflow disruption — will it actually get used |
+
+The panel is a **roster, not a fixed cast**. The weighting step (below) decides
+who's active for a given problem; most decisions activate 5–8 personas. For
+AI- and data-era decisions, the CDAIO and the data personas often promote to
+central. If you add a persona not on the roster, or drop a core one, say so and
+why in the framing step.
+
+## Cross-cutting considerations
+
+Some risks must be checked on **every** run regardless of who's at the table —
+otherwise they vanish whenever their natural owner is down-weighted. The framing
+step sweeps this standing checklist and flags any that are live, even if no
+active persona owns them:
+
+- **IP & ownership** — who owns inputs, outputs, and models; OSS license
+  obligations; vendor IP indemnity; trade-secret exposure.
+- **Data sovereignty & government compliance** — residency, sovereign/gov-cloud
+  requirements, cross-border transfer, public-sector regimes.
+- **Customer & personal data** — consent, PII handling, retention, breach
+  notification, customer trust.
+- **Change velocity & obsolescence** — the cost of moving too slow vs. too fast;
+  pace of the underlying tech (especially AI); reversibility.
+
+Treat the list as extensible (e.g. sustainability/ESG, accessibility) when a
+problem warrants. A live consideration with no owning persona is itself a finding
+— surface it.
 
 ## Method
 
@@ -67,11 +105,17 @@ State, crisply:
 - **Constraints** — budget, deadlines, regulatory, technical, political.
 - **Key assumptions and unknowns** — what you're taking as given, and what you
   don't know that matters.
+- **Considerations sweep** — run the cross-cutting checklist above and flag which
+  are live for this problem. A live consideration with no owning persona is a
+  finding; it also tells you which bench personas to pull in.
 
 ### 2. Weight the panel
-Score each persona's relevance to *this* problem (0 = ignore, 1 = minor, 2 =
-material, 3 = central). Spend analytical effort in proportion to weight. State
-the weighting in one line each so the reader sees where the stakes are.
+Score each persona's relevance to *this* problem across the **full roster** (core
++ extended bench): 0 = ignore, 1 = minor, 2 = material, 3 = central. The
+considerations sweep should drive bench call-ups (e.g. a live IP risk pulls in IP
+Counsel; an AI/data decision promotes the CDAIO). Spend analytical effort in
+proportion to weight, and state the weighting in one line each so the reader sees
+where the stakes are.
 
 ### 3. Independent positions
 For each persona with weight ≥ 1, write an independent brief **without
