@@ -125,9 +125,8 @@ class DQNTrainer:
             return self.curriculum.env_params()
         return {"birds": True, "max_speed": 13.0}
 
-    def _make_env(self, seed: Optional[int] = None) -> DinoEnv:
-        return DinoEnv(
-            action_repeat=self.cfg["action_repeat"],
+    def _make_env(self, seed: Optional[int] = None, for_eval: bool = False) -> DinoEnv:
+        kwargs = dict(
             max_frames=self.cfg["max_episode_frames"],
             survival_reward=self.cfg["survival_reward"],
             clear_reward=self.cfg["clear_reward"],
@@ -135,6 +134,20 @@ class DQNTrainer:
             seed=seed,
             **self._env_params(),
         )
+        if for_eval:
+            # Deterministic eval at the real-loop median cadence — clean,
+            # deployment-representative gating signal (no timing jitter).
+            kwargs["action_repeat"] = (self.cfg.get("eval_action_repeat")
+                                       or self.cfg["action_repeat"])
+        else:
+            kwargs["action_repeat"] = self.cfg["action_repeat"]
+            if self.cfg.get("jitter"):
+                kwargs["action_repeat_min"] = self.cfg["action_repeat_min"]
+                kwargs["action_repeat_max"] = self.cfg["action_repeat_max"]
+            if self.cfg.get("randstart"):
+                kwargs["start_speed_min"] = self.cfg["start_speed_min"]
+                kwargs["start_speed_max"] = self.cfg["start_speed_max"]
+        return DinoEnv(**kwargs)
 
     # ── Greedy evaluation — the metric every decision keys off ───────
 
@@ -143,7 +156,7 @@ class DQNTrainer:
         time, so eval deltas measure the policy, not the obstacle draw)."""
         scores, clears, causes = [], [], {}
         for i in range(self.cfg["eval_episodes"]):
-            env = self._make_env(seed=10_000 + i)
+            env = self._make_env(seed=10_000 + i, for_eval=True)
             obs = env.reset(seed=10_000 + i)
             done = False
             while not done:

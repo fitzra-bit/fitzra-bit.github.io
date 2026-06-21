@@ -1,0 +1,15 @@
+{
+  "episode": 1344,
+  "epsilon": 0.050000000000000044,
+  "total_steps": 255885,
+  "best_score": 5990.10017381116,
+  "best_eval": 11087.412499999928,
+  "curriculum": {
+    "phase_idx": 4,
+    "evals_in_phase": 0,
+    "best_eval_in_phase": 0.0,
+    "evals_since_improve": 0,
+    "interventions_used": 0,
+    "stalled": false
+  }
+}

@@ -49,6 +49,25 @@ DQN_CONFIG = {
     "action_repeat": 2,             # frames per decision (~30 decisions/sec)
     "max_episode_frames": 36_000,   # 10 game-minutes → episode timeout
 
+    # Timing domain randomization (#2) — sim→real robustness, opt-in via --jitter.
+    # The real wall-clock browser loop advances ~3.8 frames/decision (range 1–5,
+    # see measure_timing.py); a policy trained at a fixed 2 frames can't survive
+    # that jittery cadence. With --jitter, TRAINING steps sample frames uniformly
+    # in [min, max]; EVAL stays fixed at eval_action_repeat (the real-loop median)
+    # so the gating signal is deterministic and deployment-representative.
+    "jitter": False,
+    "action_repeat_min": 2,
+    "action_repeat_max": 6,
+    "eval_action_repeat": 4,
+
+    # Random start speed (#2) — opt-in via --randstart. Each TRAINING episode
+    # starts at a uniform speed in [start_speed_min, start_speed_max] (clamped to
+    # the phase's max_speed), giving full-length practice in the data-light bird
+    # band (≥8.5) where "good" trajectories are otherwise sparse. Eval unaffected.
+    "randstart": False,
+    "start_speed_min": 6.0,
+    "start_speed_max": 12.0,
+
     # Rewards (constant across ALL phases — never tune these per phase)
     "survival_reward": 0.001,       # per frame, tie-breaker only
     "clear_reward": 1.0,

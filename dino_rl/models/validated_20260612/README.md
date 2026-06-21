@@ -13,7 +13,16 @@ stationary rewards, env-shaped curriculum, greedy-eval gating). The full
 | Phase 2 (cacti, speed ≤ 10) | gated out, evals 1,340 / 949 vs gate 800 |
 | Phase 3 (cacti, speed 13) | gated out at eval 1,988 vs gate 1,000 |
 | Phase 4 (full game, birds) | eval 520 → 942 → **11,087** (timeout, full game) |
-| Browser transfer test | 2 min, 127 obstacles cleared, 0 deaths, max speed 13 |
+| Browser transfer (lockstep) | 11,087 — perfect when the agent drives the clock |
+| Browser transfer (real-time `--demo`) | **~273 — collapses under wall-clock timing jitter** |
+
+> **Correction (2026-06-20):** an earlier version listed a "127 obstacles, 0
+> deaths" real-time transfer test. That is not reproducible — in the
+> un-throttled `--demo` loop this model averages ~273 and dies at speed 7–9,
+> because it trained at a fixed 2 frames/decision but the real browser runs at
+> ~3.8 (see `../../OVERHAUL.md` and `../../measure_timing.py`). It transfers
+> perfectly only in **lockstep** (`--demo --lockstep`). For a model that plays
+> the *real-time* game, see `../validated_jitter_20260620/`.
 
 The phase-4 progression shows bird discrimination being learned: at eval
 942 it died to all three bird heights; one eval round later it stopped

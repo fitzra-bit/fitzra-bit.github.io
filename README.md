@@ -7,7 +7,7 @@ hard-won lessons here are about not fooling yourself with the metric.
 
 | Project | What it is | Status |
 |---|---|---|
-| **[`dino_rl/`](dino_rl/)** | RL agents that teach themselves the Chrome dino game. DQN and a genetic algorithm, trained in a fast Python sim, validated in the real browser. | Both agents complete the full curriculum autonomously and reach a near-perfect ceiling. |
+| **[`dino_rl/`](dino_rl/)** | RL agents that teach themselves the Chrome dino game. DQN and a genetic algorithm, trained in a fast Python sim, validated in the real browser. | Full curriculum solved in the sim (eval 11,087). Real-time browser play earned via timing domain randomization (`--jitter --randstart`); see `models/validated_jitter_20260620/`. |
 | **[`factory_sim/`](factory_sim/)** | A manufacturing-line simulator where three agents (greedy ROI, random search, DQN) compete to find the best capital-investment plan within a budget. | Working engine + three agents + HTML reports. |
 | **[`factory_chat/`](factory_chat/)** (OptiFlow) | A chat interface over the factory simulator: a plant model as source of truth, named investment scenarios, in-flight tracking, and side-by-side comparison. | Working chat app with scenario persistence. |
 
@@ -20,12 +20,22 @@ simulator into something a plant manager could actually drive in conversation.
 
 ### Dino RL — the metric *is* the experiment
 
-1. **Train in a sim, validate in the real thing.** The browser game runs at
-   ~35 steps/sec with ±10–20ms action jitter; the Python mirror
-   (`dino_env.py`) runs at ~35,000 steps/sec, deterministic. That's a ~1000×
-   speedup *and* it removes the timing noise that was capping policy quality.
-   Constant-for-constant feature parity means a network trained purely in the
-   sim plays the real browser game flawlessly — verified, not assumed.
+1. **Train in a sim, validate in the real thing — but watch the timing gap.**
+   The browser game runs at ~35 steps/sec with ±10–20ms action jitter; the
+   Python mirror (`dino_env.py`) runs at ~35,000 steps/sec, deterministic.
+   That's a ~1000× speedup *and* it removes the timing noise that was capping
+   policy quality. Constant-for-constant **feature** parity is real — the
+   observation vectors match exactly. But feature parity is **not** timing
+   parity: the sim trains at a fixed 2 frames/decision while the real
+   wall-clock browser loop advances ~3.8 frames/decision (range 1–5, see
+   `dino_rl/measure_timing.py`). A frame-perfect sim policy therefore scores
+   11,087 in the sim but only ~273 in the un-throttled browser. Two ways to
+   actually transfer: drive the browser **deterministically** (lockstep —
+   `--demo --lockstep`, gets the full 11,087), or train with **timing domain
+   randomization** (`--jitter --randstart`) so the policy survives the jittery
+   real-time loop (~3,300+, see `models/validated_jitter_20260620/`). The
+   original "trained in sim plays the real game flawlessly" claim was only
+   true under lockstep; real-time transfer had to be earned.
 
 2. **Decisions must key off a clean measurement, not the training score.**
    Training scores come from the ε-greedy *behaviour* policy — they're "policy
@@ -83,8 +93,12 @@ side-by-side. That separation is what makes the conversation auditable.
 
 ```bash
 # Dino RL — train (no browser needed), then watch it play
-cd dino_rl && python main.py --agent dqn --episodes 100000
-python main.py --demo --load models/validated_20260612/best_model.pt
+cd dino_rl && python main.py --agent dqn --jitter --randstart --episodes 8000
+python -m http.server 8766 &   # serve the game for --demo
+# real-time browser (the actual target):
+python main.py --demo --load models/validated_jitter_20260620/best_model.pt
+# sim-only model: perfect under --lockstep, weak in real-time (timing gap):
+python main.py --demo --lockstep --load models/validated_20260612/best_model.pt
 
 # Factory sim — baseline + all three agents, with HTML reports
 cd factory_sim && pip install -r requirements.txt && python main.py

@@ -114,7 +114,9 @@ _JS_START = (
 
 
 class DinoDriver:
-    def __init__(self, headless: bool = GAME_CONFIG["headless"]):
+    def __init__(self, headless: bool = GAME_CONFIG["headless"],
+                 lockstep: bool = False):
+        self.lockstep = lockstep
         opts = Options()
 
         # Use bundled Playwright Chromium if available, else let webdriver-manager find Chrome
@@ -142,6 +144,15 @@ class DinoDriver:
         self._driver_pid: Optional[int] = getattr(self.driver.service.process, "pid", None)
         self.ground_y: float = 93.0
         self._open_game()
+        if self.lockstep:
+            self._enable_lockstep()
+
+    def _enable_lockstep(self):
+        """Halt the game's wall-clock rAF loop so the agent drives stepping."""
+        try:
+            self.driver.execute_script("window.enableLockstep();")
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Setup
@@ -190,8 +201,7 @@ class DinoDriver:
         except Exception:
             return None
 
-    def get_state(self) -> Optional[GameState]:
-        raw = self._raw_state()
+    def _state_from_raw(self, raw: Optional[dict]) -> Optional[GameState]:
         if raw is None:
             return None
 
@@ -218,6 +228,9 @@ class DinoDriver:
             ground_y=self.ground_y,
             cleared=int(raw.get("cleared", 0)),
         )
+
+    def get_state(self) -> Optional[GameState]:
+        return self._state_from_raw(self._raw_state())
 
     # ------------------------------------------------------------------
     # Actions
@@ -252,6 +265,27 @@ class DinoDriver:
             self.duck()
         else:
             self.release_duck()
+
+    def step(self, action: int, n_frames: int = 2) -> Optional[GameState]:
+        """Lockstep: apply action, advance exactly n_frames, return state.
+
+        Mirrors DinoEnv.step() — the action transition is applied once, then
+        n_frames physics frames run with fe=1. Action + step + state read
+        happen in a single execute_script, so no game time and no jitter can
+        slip in between them. Requires lockstep mode (window.enableLockstep()).
+        """
+        if action == 1:
+            act_js = "Runner.instance_.tRex.startJump(Runner.instance_.currentSpeed);"
+        elif action == 2:
+            act_js = "Runner.instance_.tRex.setDuck(true);"
+        else:
+            act_js = "Runner.instance_.tRex.setDuck(false);"
+        js = act_js + f" return JSON.stringify(window.stepFrames({int(n_frames)}));"
+        try:
+            raw = json.loads(self.driver.execute_script(js))
+        except Exception:
+            return None
+        return self._state_from_raw(raw)
 
     # ------------------------------------------------------------------
     # Episode control

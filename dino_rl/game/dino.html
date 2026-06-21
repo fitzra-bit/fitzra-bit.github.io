@@ -482,6 +482,7 @@ const runner = {
   get currentSpeed() { return currentSpeed; },
   get obstaclesCleared() { return obstaclesCleared; },
   get deathCause()   { return deathCause; },
+  get runningTime()  { return runningTime; },   // ms; for timing-jitter measurement
   get groundYPos()   { return TREX_GROUND_Y; },
   get tRex()         { return tRex; },
   get started()      { return started; },
@@ -519,7 +520,8 @@ const runner = {
     groundOffset = 0;
     started      = true;
     lastTime     = null;
-    if (!animId) animId = requestAnimationFrame(loop);
+    // In lockstep mode the agent drives stepping; don't resume the rAF loop.
+    if (!window.__lockstep && !animId) animId = requestAnimationFrame(loop);
   },
 };
 
@@ -768,12 +770,47 @@ function draw() {
 
 // ── Main loop ────────────────────────────────────────────────────────
 function loop(ts) {
+  // Lockstep mode: the agent advances the game via window.stepFrames(),
+  // so the real-time rAF loop must NOT also step physics.
+  if (window.__lockstep) { animId = null; return; }
   const dt = lastTime !== null ? Math.min(ts - lastTime, 100) : MS_PER_FRAME;
   lastTime = ts;
   update(dt);
   draw();
   animId = requestAnimationFrame(loop);
 }
+
+// ── Lockstep interface (deterministic, jitter-free eval/demo) ─────────
+// Matches DinoEnv: one decision = action_repeat frames, each with fe=1.
+// enableLockstep() halts the wall-clock loop; stepFrames(n) advances
+// exactly n physics frames and returns the same state shape as
+// chrome_driver's _JS_GET_STATE.
+window.__lockstep = false;
+window.enableLockstep = function () {
+  window.__lockstep = true;
+  if (animId) { cancelAnimationFrame(animId); animId = null; }
+};
+window.stepFrames = function (n) {
+  for (let i = 0; i < n; i++) {
+    if (crashed || !started) break;
+    update(MS_PER_FRAME);   // fe = 1, identical to DinoEnv._advance_frame()
+  }
+  draw();
+  return {
+    crashed:  crashed,
+    score:    distanceRan,
+    speed:    currentSpeed,
+    groundY:  TREX_GROUND_Y,
+    dinoY:    dinoY,
+    dinoVelY: jumpVelocity,
+    jumping:  jumping,
+    ducking:  ducking,
+    cleared:  obstaclesCleared,
+    obstacles: obstacles.slice(0, 2).map(function (o) {
+      return { x: o.x, y: o.y, w: o.w, h: o.h, type: o.type };
+    }),
+  };
+};
 
 // Auto-start: the RL trainer drives the game via JS injection.
 started = true;

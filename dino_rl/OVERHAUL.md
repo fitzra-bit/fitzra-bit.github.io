@@ -41,10 +41,19 @@ The Selenium loop had two unfixable problems as a *training* environment:
   behaviour at speed peaks.
 
 `game/dino_env.py` mirrors `dino.html` constant-for-constant (same physics,
-spawning, collision boxes). Verified parity: random-policy score ≈45 in both;
-a scripted TTC-timed jumper scores ~6,700 in the sim and behaves identically
-in the browser. Training now happens at ~35k env-steps/sec with zero jitter;
+spawning, collision boxes). Verified **feature/physics** parity: random-policy
+score ≈45 in both. Training now happens at ~35k env-steps/sec with zero jitter;
 the browser is for watching (`--demo`) and for final reality checks.
+
+> **Correction (2026-06-20): parity of features is not parity of timing.**
+> An earlier version of this doc claimed a sim-trained policy "behaves
+> identically in the browser." That holds only when the browser is driven in
+> **lockstep** (`--demo --lockstep`: one decision = `action_repeat` frames,
+> deterministic — gets the full 11,087). In the *real-time* `--demo` loop the
+> browser advances ~3.8 frames/decision (range 1–5; `measure_timing.py`) while
+> the sim trains at a fixed 2, so a frame-perfect sim policy drops to ~273.
+> Real-time transfer requires timing domain randomization — see the new
+> "Timing domain randomization" section below and `models/validated_jitter_20260620/`.
 
 ### 2. Sparse, stationary rewards + environment-shaped curriculum
 
@@ -212,6 +221,42 @@ env-shaped curriculum, and fixed-seed greedy eval. Two GA-specific points:
   adaptive cap fixed it and the GA reached eval 11,087, matching the DQN. This
   is the genetic analogue of §3: *the control signal, not just the report, has
   to stay informative.*
+
+## Timing domain randomization — sim→real transfer (2026-06-20)
+
+The overhaul made the sim a perfect *trainer* but left a *deployment* gap: the
+sim is deterministic at 2 frames/decision; the real-time browser is jittery at
+~3.8. Closing it took two training-only changes (eval and the real game are
+unchanged), both enabled together via `--jitter --randstart`:
+
+### Timing jitter (`--jitter`)
+Each **training** step advances a random number of frames in
+`[action_repeat_min, action_repeat_max]` = 2–6, bracketing the measured real
+distribution (mean 3.8, range 1–5; reproduce with `measure_timing.py`). This
+forces the policy to learn timing *margins* instead of frame-perfect timing.
+**Eval stays fixed at `eval_action_repeat` = 4** (the real-loop median) on the
+usual fixed seeds — so the gating signal is deterministic *and* representative
+of deployment. (`DinoEnv` uses an independent `timing_rng` so the obstacle
+sequence for a seed is identical with or without jitter, keeping runs comparable.)
+
+### Random start speed (`--randstart`)
+Jitter alone got the policy robust on cacti but it **walled on phase 4 (birds)
+at eval 565 for 500+ episodes**. Diagnosis: the bird band (speed ≥ 8.5) is the
+hardest region *and* the most data-starved of *successful* trajectories — every
+episode only flies through it briefly after surviving the easy early game, and
+once the agent dies there it rarely collects a clean traverse to learn from.
+Fix: start each **training** episode at a uniform speed in 6–12 (clamped to the
+phase max), so the agent gets *full-length* practice in the hard band every
+episode. This cracked the bird phase in ~50 episodes and rode to the 11,087
+ceiling. The lesson rhymes with §3: when a learner plateaus, check whether the
+*hard region is under-represented in good signal* before concluding it's at
+capacity. Eval always starts at the canonical speed 6.
+
+### Result
+| Loop | sim-only model (`validated_20260612`) | jitter+randstart (`validated_jitter_20260620`) |
+|---|---|---|
+| sim / lockstep browser | 11,087 | 11,087 |
+| **real-time `--demo` browser** | **~273** (dies speed 7–9) | **~3,300+, 5/6 cruise** |
 
 ## Invalidation note
 

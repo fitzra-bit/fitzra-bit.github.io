@@ -135,6 +135,16 @@ def _run_genetic_browser(args, cfg):
 
 def run_dqn(args):
     cfg = {**DQN_CONFIG}
+    if getattr(args, "jitter", False):
+        cfg["jitter"] = True
+        print(f"Timing jitter ON: training {cfg['action_repeat_min']}-"
+              f"{cfg['action_repeat_max']} frames/decision, "
+              f"eval fixed at {cfg['eval_action_repeat']} (sim-to-real robustness)")
+    if getattr(args, "randstart", False):
+        cfg["randstart"] = True
+        print(f"Random start speed ON: training episodes start at "
+              f"{cfg['start_speed_min']}-{cfg['start_speed_max']} "
+              f"(enriches the data-light bird band; eval starts at 6)")
 
     from logger import RunLogger, find_latest_run
     from agents.dqn.trainer import DQNTrainer
@@ -216,10 +226,18 @@ def run_demo(args):
 
     poll       = GAME_CONFIG["poll_interval"]
     dbg_every  = getattr(args, "debug_steps", 0)
+    lockstep   = getattr(args, "lockstep", False)
+    n_frames   = cfg["action_repeat"]
 
     _ACTIONS = {0: "noop", 1: "jump", 2: "duck"}
 
-    driver = DinoDriver(headless=False)   # always visible — that's the point
+    if lockstep:
+        print(f"Loop:    lockstep ({n_frames} frames/decision, deterministic — "
+              f"matches the sim exactly)")
+    else:
+        print(f"Loop:    real-time (poll {poll*1000:.0f}ms wall-clock; subject to jitter)")
+
+    driver = DinoDriver(headless=False, lockstep=lockstep)   # always visible
     ep     = 0
     best   = 0.0
 
@@ -227,7 +245,8 @@ def run_demo(args):
         while True:
             ep += 1
             driver.reset()
-            time.sleep(0.4)              # slightly longer settle so you can see it start
+            if not lockstep:
+                time.sleep(0.4)         # settle so you can see it start
 
             state = driver.get_state()
             if state is None:
@@ -256,10 +275,12 @@ def run_demo(args):
                     print(f"           Q: {q_str}  → {chosen}")
 
                 action = net.predict(obs)
-                driver.act(action)
-                time.sleep(poll)
-
-                next_state = driver.get_state()
+                if lockstep:
+                    next_state = driver.step(action, n_frames=n_frames)
+                else:
+                    driver.act(action)
+                    time.sleep(poll)
+                    next_state = driver.get_state()
                 if next_state is None:
                     break
 
@@ -374,6 +395,25 @@ def main():
         default=0,
         metavar="N",
         help="Demo: print obs vector + Q-values every N steps for the first episode (0 = off)",
+    )
+    parser.add_argument(
+        "--lockstep",
+        action="store_true",
+        help="Demo: drive the browser deterministically (action_repeat frames per "
+             "decision, no wall-clock polling) — removes the sim-to-browser timing gap.",
+    )
+    parser.add_argument(
+        "--jitter",
+        action="store_true",
+        help="DQN training: domain-randomize frames/decision (sim→real timing "
+             "robustness). Training jitters action_repeat_min–max; eval fixed at "
+             "eval_action_repeat. See measure_timing.py for the real distribution.",
+    )
+    parser.add_argument(
+        "--randstart",
+        action="store_true",
+        help="DQN training: start episodes at a random speed (start_speed_min–max) "
+             "to enrich practice in the data-light bird band. Eval starts at 6.",
     )
     args = parser.parse_args()
 

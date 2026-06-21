@@ -82,6 +82,10 @@ class DinoEnv:
         max_speed: float = 13.0,
         accel: float = 0.001,
         action_repeat: int = 2,
+        action_repeat_min: Optional[int] = None,
+        action_repeat_max: Optional[int] = None,
+        start_speed_min: Optional[float] = None,
+        start_speed_max: Optional[float] = None,
         max_frames: int = 36_000,        # 10 game-minutes cap
         survival_reward: float = 0.001,  # per frame
         clear_reward: float = 1.0,
@@ -93,6 +97,24 @@ class DinoEnv:
         self.max_speed = max_speed
         self.accel = accel
         self.action_repeat = action_repeat
+        # Timing domain randomization (#2): when both bounds are set, each step
+        # advances a random number of frames in [min, max] instead of the fixed
+        # action_repeat — bracketing the real browser loop (measured mean 3.8,
+        # range 1–5) so the policy learns timing margins, not frame-perfection.
+        self.action_repeat_min = action_repeat_min
+        self.action_repeat_max = action_repeat_max
+        self._jitter = action_repeat_min is not None and action_repeat_max is not None
+        # Random start speed (#2, hard-region enrichment): when set, each TRAINING
+        # episode begins at a random speed in [min, max] (clamped to max_speed),
+        # so the policy gets full-length practice across all speeds — especially
+        # the data-light bird band (≥8.5) — instead of a brief fly-through after
+        # surviving the easy early game. Eval keeps the canonical start at speed 6.
+        self.start_speed_min = start_speed_min
+        self.start_speed_max = start_speed_max
+        self._randstart = start_speed_min is not None and start_speed_max is not None
+        # Independent RNG so the obstacle sequence for a given seed is identical
+        # whether or not timing jitter is on (keeps jitter/no-jitter comparable).
+        self.timing_rng = np.random.default_rng(None if seed is None else seed + 777)
         self.max_frames = max_frames
         self.survival_reward = survival_reward
         self.clear_reward = clear_reward
@@ -105,13 +127,19 @@ class DinoEnv:
     def reset(self, seed: Optional[int] = None) -> np.ndarray:
         if seed is not None:
             self.rng = np.random.default_rng(seed)
+            self.timing_rng = np.random.default_rng(seed + 777)
         self.dino_y = TREX_GROUND_Y
         self.jump_vel = 0.0
         self.jumping = False
         self.ducking = False
         self.speed_drop = False
         self.crashed = False
-        self.speed = INITIAL_SPEED
+        if self._randstart:
+            lo = min(self.start_speed_min, self.max_speed)
+            hi = min(self.start_speed_max, self.max_speed)
+            self.speed = float(self.timing_rng.uniform(lo, hi)) if hi > lo else lo
+        else:
+            self.speed = INITIAL_SPEED
         self.raw_distance = 0.0
         self.running_time_ms = 0.0
         self.frames = 0
@@ -152,7 +180,11 @@ class DinoEnv:
 
         reward = 0.0
         cleared_before = self.cleared
-        for _ in range(self.action_repeat):
+        n_frames = self.action_repeat
+        if self._jitter:
+            n_frames = int(self.timing_rng.integers(
+                self.action_repeat_min, self.action_repeat_max + 1))
+        for _ in range(n_frames):
             self._advance_frame()
             reward += self.survival_reward
             if self.crashed or self.frames >= self.max_frames:
