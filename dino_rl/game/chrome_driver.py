@@ -70,6 +70,8 @@ _PW_DRIVER   = "/tmp/chromedriver-linux64/chromedriver"
 from config import GAME_CONFIG
 from game.game_state import GameState, Obstacle
 
+_MS_PER_FRAME = 1000.0 / 60.0   # for converting runningTime deltas → frames (cadence)
+
 # JS that reads the full game state from the Runner singleton.
 _JS_GET_STATE = """
 try {
@@ -95,6 +97,7 @@ try {
         jumping:  tRex.jumping,
         ducking:  tRex.ducking,
         cleared:  r.obstaclesCleared || 0,
+        runningTime: r.runningTime || 0,
         obstacles: obs
     });
 } catch(e) {
@@ -143,6 +146,7 @@ class DinoDriver:
         # Track the ChromeDriver PID so we can force-kill it if quit() doesn't finish.
         self._driver_pid: Optional[int] = getattr(self.driver.service.process, "pid", None)
         self.ground_y: float = 93.0
+        self._prev_rt: Optional[float] = None   # last runningTime, for cadence feature
         self._open_game()
         if self.lockstep:
             self._enable_lockstep()
@@ -205,6 +209,17 @@ class DinoDriver:
         if raw is None:
             return None
 
+        # Decision cadence (v2 feature): frames elapsed since the last state read.
+        # Works for both loops — lockstep advances runningTime by exactly
+        # n_frames·MS_PER_FRAME; wall-clock by the real (jittery) elapsed time.
+        rt = raw.get("runningTime")
+        if rt is not None and self._prev_rt is not None and rt >= self._prev_rt:
+            cadence = (rt - self._prev_rt) / _MS_PER_FRAME
+        else:
+            cadence = 2.0   # nominal on first read after reset
+        if rt is not None:
+            self._prev_rt = rt
+
         obstacles = [
             Obstacle(
                 x=o["x"],
@@ -227,6 +242,7 @@ class DinoDriver:
             obstacles=obstacles,
             ground_y=self.ground_y,
             cleared=int(raw.get("cleared", 0)),
+            cadence_frames=cadence,
         )
 
     def get_state(self) -> Optional[GameState]:
@@ -297,6 +313,7 @@ class DinoDriver:
             self.driver.execute_script(_JS_RESTART)
         except Exception:
             self._start_game()
+        self._prev_rt = None   # restart zeroes runningTime; reset cadence tracking
         time.sleep(0.3)
 
     def close(self):

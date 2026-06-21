@@ -52,8 +52,9 @@ OB_TYPES = {
                      "speed_offset": 0.8},
 }
 
-N_FEATURES = 15
+N_FEATURES = 20           # 15 base + 5 v2 (dissolved time features + cadence)
 TTC_FRAMES_NORM = 120.0   # frames-to-impact normaliser for the TTC feature
+TRAVERSE_NORM = 20.0      # frames-to-traverse normaliser (obstacle width / speed)
 
 
 class _Obstacle:
@@ -134,6 +135,7 @@ class DinoEnv:
         self.ducking = False
         self.speed_drop = False
         self.crashed = False
+        self.last_n_frames = self.action_repeat   # cadence feature seed (v2)
         if self._randstart:
             lo = min(self.start_speed_min, self.max_speed)
             hi = min(self.start_speed_max, self.max_speed)
@@ -184,6 +186,7 @@ class DinoEnv:
         if self._jitter:
             n_frames = int(self.timing_rng.integers(
                 self.action_repeat_min, self.action_repeat_max + 1))
+        self.last_n_frames = n_frames   # diagnostic: jitter draw on this step
         for _ in range(n_frames):
             self._advance_frame()
             reward += self.survival_reward
@@ -327,6 +330,20 @@ class DinoEnv:
                 return [1.0, 0.0, 0.0, 0.0]
             return [max(0.0, ob.x / W), ob.y / H, ob.w / W, float(ob.is_bird)]
 
+        def ttc_of(ob: Optional[_Obstacle]) -> float:
+            """Frames until the obstacle reaches the dino's front (time-to-impact)."""
+            if ob is None:
+                return 1.0
+            f = max(0.0, ob.x - (TREX_X + TREX_W)) / max(self.speed, 0.1)
+            return min(f, TTC_FRAMES_NORM) / TTC_FRAMES_NORM
+
+        def traverse_of(ob: Optional[_Obstacle]) -> float:
+            """Frames the obstacle blocks the kill x-zone (width / speed) — how long
+            the dino must stay clear. Bigger for wide/grouped cacti at low speed."""
+            if ob is None:
+                return 0.0
+            return min(ob.w / max(self.speed, 0.1), TRAVERSE_NORM) / TRAVERSE_NORM
+
         # First two obstacles not yet passed
         ahead = [ob for ob in self.obstacles if not ob.counted]
         o1 = ahead[0] if len(ahead) > 0 else None
@@ -334,12 +351,21 @@ class DinoEnv:
 
         f1, f2 = feats(o1), feats(o2)
         gap = (o2.x - (o1.x + o1.w)) / W if (o1 and o2) else 1.0
+        ttc1 = ttc_of(o1)
 
-        if o1 is not None:
-            frames_to_impact = max(0.0, o1.x - (TREX_X + TREX_W)) / max(self.speed, 0.1)
-            ttc = min(frames_to_impact, TTC_FRAMES_NORM) / TTC_FRAMES_NORM
+        # ── v2: dissolved (time-based) features + decision cadence ──────────
+        # These re-express the physics in TIME units so the policy generalises
+        # across speed, and expose the realized decision cadence so the policy
+        # can perceive (and adapt to) jitter spikes. See OVERHAUL.md.
+        ttc2 = ttc_of(o2)
+        trav1 = traverse_of(o1)
+        trav2 = traverse_of(o2)
+        if o1 is not None and o2 is not None:
+            tgap = min(max(0.0, o2.x - (o1.x + o1.w)) / max(self.speed, 0.1),
+                       TTC_FRAMES_NORM) / TTC_FRAMES_NORM
         else:
-            ttc = 1.0
+            tgap = 1.0
+        cadence = self.last_n_frames / 6.0
 
         return np.array(
             f1 + f2 + [
@@ -349,7 +375,9 @@ class DinoEnv:
                 self.jump_vel / 20.0,
                 float(self.jumping),
                 float(self.ducking),
-                ttc,
+                ttc1,
+                # ── appended v2 features (indices 15–19) ──
+                ttc2, trav1, trav2, tgap, cadence,
             ],
             dtype=np.float32,
         )

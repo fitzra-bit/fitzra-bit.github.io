@@ -135,10 +135,15 @@ class DQNTrainer:
             **self._env_params(),
         )
         if for_eval:
-            # Deterministic eval at the real-loop median cadence — clean,
-            # deployment-representative gating signal (no timing jitter).
             kwargs["action_repeat"] = (self.cfg.get("eval_action_repeat")
                                        or self.cfg["action_repeat"])
+            # Representative eval: when training has timing jitter, eval under the
+            # SAME jitter (deterministic per fixed seed) so the gate/checkpoint
+            # signal reflects deployment — a fixed-cadence eval rewards timing-
+            # fragile tricks (jumping high birds) that fail under real jitter.
+            if self.cfg.get("jitter") and self.cfg.get("eval_jitter"):
+                kwargs["action_repeat_min"] = self.cfg["action_repeat_min"]
+                kwargs["action_repeat_max"] = self.cfg["action_repeat_max"]
         else:
             kwargs["action_repeat"] = self.cfg["action_repeat"]
             if self.cfg.get("jitter"):

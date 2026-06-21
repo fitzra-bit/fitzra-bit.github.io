@@ -14,6 +14,7 @@ _W, _H = 600.0, 150.0
 _TREX_X, _TREX_W = 50.0, 44.0
 _INITIAL_SPEED = 6.0
 _TTC_FRAMES_NORM = 120.0
+_TRAVERSE_NORM = 20.0       # must match dino_env.TRAVERSE_NORM
 
 
 @dataclass
@@ -41,6 +42,7 @@ class GameState:
     obstacles: List[Obstacle] = field(default_factory=list)
     ground_y: float = 93.0
     cleared: int = 0                  # authoritative counter from the game
+    cadence_frames: float = 2.0       # frames elapsed since last decision (set by driver)
 
     def to_array(self) -> np.ndarray:
         """15 features — identical layout to DinoEnv._observe():
@@ -63,6 +65,17 @@ class GameState:
                 return [1.0, 0.0, 0.0, 0.0]
             return [max(0.0, ob.x / _W), ob.y / _H, ob.width / _W, float(ob.is_bird)]
 
+        def ttc_of(ob: Optional[Obstacle]) -> float:
+            if ob is None:
+                return 1.0
+            f = max(0.0, ob.x - (_TREX_X + _TREX_W)) / max(self.speed, 0.1)
+            return min(f, _TTC_FRAMES_NORM) / _TTC_FRAMES_NORM
+
+        def traverse_of(ob: Optional[Obstacle]) -> float:
+            if ob is None:
+                return 0.0
+            return min(ob.width / max(self.speed, 0.1), _TRAVERSE_NORM) / _TRAVERSE_NORM
+
         # Only obstacles still ahead of the dino (parity with sim's
         # not-counted filter — the browser list includes passed obstacles
         # until they scroll off-screen).
@@ -72,12 +85,19 @@ class GameState:
 
         f1, f2 = feats(o1), feats(o2)
         gap = (o2.x - (o1.x + o1.width)) / _W if (o1 and o2) else 1.0
+        ttc1 = ttc_of(o1)
 
-        if o1 is not None:
-            frames = max(0.0, o1.x - (_TREX_X + _TREX_W)) / max(self.speed, 0.1)
-            ttc = min(frames, _TTC_FRAMES_NORM) / _TTC_FRAMES_NORM
+        # ── v2: dissolved (time-based) features + decision cadence ──────────
+        # MUST mirror dino_env.DinoEnv._observe() exactly (transfer depends on it).
+        ttc2 = ttc_of(o2)
+        trav1 = traverse_of(o1)
+        trav2 = traverse_of(o2)
+        if o1 is not None and o2 is not None:
+            tgap = min(max(0.0, o2.x - (o1.x + o1.width)) / max(self.speed, 0.1),
+                       _TTC_FRAMES_NORM) / _TTC_FRAMES_NORM
         else:
-            ttc = 1.0
+            tgap = 1.0
+        cadence = self.cadence_frames / 6.0
 
         return np.array(
             f1 + f2 + [
@@ -87,7 +107,9 @@ class GameState:
                 self.dino_vel_y / 20.0,
                 float(self.dino_jumping),
                 float(self.dino_ducking),
-                ttc,
+                ttc1,
+                # ── appended v2 features (indices 15–19) ──
+                ttc2, trav1, trav2, tgap, cadence,
             ],
             dtype=np.float32,
         )

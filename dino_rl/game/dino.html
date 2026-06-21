@@ -806,6 +806,7 @@ window.stepFrames = function (n) {
     jumping:  jumping,
     ducking:  ducking,
     cleared:  obstaclesCleared,
+    runningTime: runningTime,
     obstacles: obstacles.slice(0, 2).map(function (o) {
       return { x: o.x, y: o.y, w: o.w, h: o.h, type: o.type };
     }),

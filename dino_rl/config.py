@@ -27,7 +27,9 @@ GENETIC_CONFIG = {
 # The browser game is the eval/demo surface (python main.py --demo).
 DQN_CONFIG = {
     # Network: dueling trunk (V/A heads appended internally)
-    "network_layers": [15, 128, 64],
+    # Input is 20 (v2: 15 base + dissolved time features + decision cadence;
+    # see game/dino_env.py). Pre-v2 checkpoints (15-input) are incompatible.
+    "network_layers": [20, 128, 64],
 
     # Optimisation
     "lr": 1e-4,
@@ -75,7 +77,13 @@ DQN_CONFIG = {
 
     # Evaluation protocol — drives gates, checkpoints, stall detection
     "eval_every": 50,               # episodes between greedy eval rounds
-    "eval_episodes": 5,             # fixed-seed episodes per round
+    "eval_episodes": 16,            # fixed-seed episodes per round (raised from 5:
+                                    # 5 seeds let a jump-all-birds policy pass by luck)
+    # Eval under jitter (deterministically seeded) when training has jitter, so the
+    # exam reflects DEPLOYMENT reality. A fixed-cadence eval rewards timing-fragile
+    # tricks (e.g. jumping high birds) that collapse under real jitter — making the
+    # checkpoint/gate signal non-representative. Still repeatable (fixed seeds).
+    "eval_jitter": True,
 
     # Phase-entry exploration (new env ⇒ re-explore briefly)
     "phase_entry_epsilon": 0.25,
