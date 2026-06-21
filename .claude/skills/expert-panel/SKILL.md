@@ -118,8 +118,12 @@ proportion to weight, and state the weighting in one line each so the reader see
 where the stakes are.
 
 ### 3. Independent positions
-For each persona with weight ≥ 1, write an independent brief **without
-referencing the others yet**. Each brief contains:
+For **every** persona with weight ≥ 1, write an independent brief **without
+referencing the others yet**. Each active persona gets its **own clearly-labeled
+viewpoint block** — never merge, condense, or roll several personas into one
+entry, even when they'd agree or when their weight is low. The per-persona
+breakdown is the heart of the method; if you collapse it, you've defeated the
+purpose. Each brief contains:
 - **Position** — what this persona wants to happen.
 - **Why** — reasoning from their mandate and what they optimize for.
 - **Steelman + attack** — the strongest case *for* the proposal from their seat,
@@ -166,9 +170,17 @@ Produce the deliverable using `output-template.md` as the structure. Lead with
 the executive summary (decision + recommendation + confidence) so a busy reader
 gets the answer first; the per-persona detail and tension map support it below.
 
-Scale depth to the problem: a small call gets a tight pass (framing, top 3
-weighted personas, tensions, recommendation); a major decision gets the full
-treatment. State which mode you ran.
+**The per-persona viewpoint breakdown (§3) is a required, always-rendered
+section** — one labeled block per active persona, in full. Do not summarize it
+away, even in a follow-up turn that revisits the decision: when new information
+changes the picture, re-render the affected personas' viewpoints rather than
+narrating the change in prose.
+
+Scale depth to the problem by **how many personas you activate** (the weighting
+step), not by collapsing the ones you did activate. A small call gets a tight
+pass — fewer personas (often the top 3–5), but each still gets its own viewpoint
+block, tensions, and a recommendation. A major decision activates the full
+roster. State which mode you ran.
 
 ## Calibration notes
 

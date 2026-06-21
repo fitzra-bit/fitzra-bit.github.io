@@ -47,7 +47,9 @@ Score the full roster; bench rows that score 0 can be dropped from the table.
 | _other bench (CFO, EA, Change mgmt)_ | | |
 
 ## 3. Independent positions
-For each persona with weight ≥ 1:
+Render **one block per active persona** (weight ≥ 1). Required section — never
+merge personas together or condense this away, even on low-weight personas or in
+a revisit turn. Repeat the block below for each:
 
 ### <Persona> (weight N)
 - **Position**: …
