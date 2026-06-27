@@ -52,7 +52,7 @@ OB_TYPES = {
                      "speed_offset": 0.8},
 }
 
-N_FEATURES = 20           # 15 base + 5 v2 (dissolved time features + cadence)
+N_FEATURES = 26           # 15 base + 5 v2 + 6 explicit obstacle-class one-hots
 TTC_FRAMES_NORM = 120.0   # frames-to-impact normaliser for the TTC feature
 TRAVERSE_NORM = 20.0      # frames-to-traverse normaliser (obstacle width / speed)
 
@@ -80,6 +80,10 @@ class DinoEnv:
         self,
         birds: bool = True,
         bird_min_speed: float = 8.5,
+        bird_weight: Optional[float] = None,   # P(spawn is a bird) when active; None = original uniform
+        bird_gap_scale: float = 1.0,           # gap scale after MID/HIGH birds (<1 = tight stream)
+        bird_gap_scale_low: float = 1.0,       # gap scale after LOW birds (keep room to land the jump)
+        bird_heights: Optional[list] = None,   # allowed bird y's; None = all three
         max_speed: float = 13.0,
         accel: float = 0.001,
         action_repeat: int = 2,
@@ -87,6 +91,8 @@ class DinoEnv:
         action_repeat_max: Optional[int] = None,
         start_speed_min: Optional[float] = None,
         start_speed_max: Optional[float] = None,
+        use_dissolved: bool = True,      # ablation: zero the dissolved time features
+        use_cadence: bool = True,        # ablation: zero the cadence feature
         max_frames: int = 36_000,        # 10 game-minutes cap
         survival_reward: float = 0.001,  # per frame
         clear_reward: float = 1.0,
@@ -95,6 +101,10 @@ class DinoEnv:
     ):
         self.birds = birds
         self.bird_min_speed = bird_min_speed
+        self.bird_weight = bird_weight
+        self.bird_gap_scale = bird_gap_scale
+        self.bird_gap_scale_low = bird_gap_scale_low
+        self.bird_heights = bird_heights if bird_heights is not None else OB_TYPES["PTERODACTYL"]["ys"]
         self.max_speed = max_speed
         self.accel = accel
         self.action_repeat = action_repeat
@@ -113,6 +123,8 @@ class DinoEnv:
         self.start_speed_min = start_speed_min
         self.start_speed_max = start_speed_max
         self._randstart = start_speed_min is not None and start_speed_max is not None
+        self.use_dissolved = use_dissolved
+        self.use_cadence = use_cadence
         # Independent RNG so the obstacle sequence for a given seed is identical
         # whether or not timing jitter is on (keeps jitter/no-jitter comparable).
         self.timing_rng = np.random.default_rng(None if seed is None else seed + 777)
@@ -255,24 +267,36 @@ class DinoEnv:
             self.death_cause = cause
 
     def _spawn(self):
-        names = ["CACTUS_SMALL", "CACTUS_LARGE"]
-        if self.birds and self.speed >= self.bird_min_speed:
-            names.append("PTERODACTYL")
+        birds_active = self.birds and self.speed >= self.bird_min_speed
 
-        name = names[int(self.rng.integers(len(names)))]
-        for _ in range(4):   # duplication rule: max 2 identical in a row
-            if (len(self.history) >= MAX_OBSTACLE_DUPLICATION
-                    and all(h == name for h in self.history[-MAX_OBSTACLE_DUPLICATION:])):
-                name = names[int(self.rng.integers(len(names)))]
+        if self.bird_weight is not None:
+            # Curriculum bird phases: bird with prob bird_weight, else 50/50 cactus.
+            # No duplication rule — consecutive birds (streams) are the whole point.
+            if birds_active and self.rng.random() < self.bird_weight:
+                name = "PTERODACTYL"
             else:
-                break
+                name = "CACTUS_SMALL" if self.rng.random() < 0.5 else "CACTUS_LARGE"
+        else:
+            names = ["CACTUS_SMALL", "CACTUS_LARGE"]
+            if birds_active:
+                names.append("PTERODACTYL")
+            name = names[int(self.rng.integers(len(names)))]
+            for _ in range(4):   # duplication rule: max 2 identical in a row
+                if (len(self.history) >= MAX_OBSTACLE_DUPLICATION
+                        and all(h == name for h in self.history[-MAX_OBSTACLE_DUPLICATION:])):
+                    name = names[int(self.rng.integers(len(names)))]
+                else:
+                    break
 
         cfg = OB_TYPES[name]
         if name == "PTERODACTYL":
-            y = cfg["ys"][int(self.rng.integers(3))]
+            y = self.bird_heights[int(self.rng.integers(len(self.bird_heights)))]
             w = cfg["w"]
             offset = cfg["speed_offset"] if self.rng.random() > 0.5 else -cfg["speed_offset"]
-            gap = self._gap(cfg["min_gap"], w)
+            # Low birds (must JUMP) get room to land; mid/high (must DUCK) stay tight,
+            # so the only survivable policy is height-conditional: jump low, duck mid/high.
+            scale = self.bird_gap_scale_low if y == 100.0 else self.bird_gap_scale
+            gap = self._gap(cfg["min_gap"], w) * scale
             self.obstacles.append(_Obstacle(name, W, y, w, cfg["h"], gap, offset))
         else:
             group = 1
@@ -357,15 +381,27 @@ class DinoEnv:
         # These re-express the physics in TIME units so the policy generalises
         # across speed, and expose the realized decision cadence so the policy
         # can perceive (and adapt to) jitter spikes. See OVERHAUL.md.
-        ttc2 = ttc_of(o2)
-        trav1 = traverse_of(o1)
-        trav2 = traverse_of(o2)
-        if o1 is not None and o2 is not None:
-            tgap = min(max(0.0, o2.x - (o1.x + o1.w)) / max(self.speed, 0.1),
-                       TTC_FRAMES_NORM) / TTC_FRAMES_NORM
+        if self.use_dissolved:
+            ttc2 = ttc_of(o2)
+            trav1 = traverse_of(o1)
+            trav2 = traverse_of(o2)
+            if o1 is not None and o2 is not None:
+                tgap = min(max(0.0, o2.x - (o1.x + o1.w)) / max(self.speed, 0.1),
+                           TTC_FRAMES_NORM) / TTC_FRAMES_NORM
+            else:
+                tgap = 1.0
         else:
-            tgap = 1.0
-        cadence = self.last_n_frames / 6.0
+            ttc2 = trav1 = trav2 = tgap = 0.0   # ablated: constant → no information
+        cadence = (self.last_n_frames / 6.0) if self.use_cadence else 0.0
+
+        # Explicit obstacle-class one-hots — give the height/type as a crisp
+        # categorical cue (bird_low/mid/high) so the policy learns per-class
+        # action without inferring it from continuous y × is_bird, and without
+        # latching onto a spurious cue (e.g. spacing).
+        def bird_class(ob: Optional[_Obstacle]):
+            if ob is None or not ob.is_bird:
+                return [0.0, 0.0, 0.0]
+            return [float(ob.y == 100.0), float(ob.y == 75.0), float(ob.y == 50.0)]
 
         return np.array(
             f1 + f2 + [
@@ -378,6 +414,6 @@ class DinoEnv:
                 ttc1,
                 # ── appended v2 features (indices 15–19) ──
                 ttc2, trav1, trav2, tgap, cadence,
-            ],
+            ] + bird_class(o1) + bird_class(o2),   # indices 20–25
             dtype=np.float32,
         )

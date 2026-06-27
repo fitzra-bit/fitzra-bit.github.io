@@ -27,9 +27,9 @@ GENETIC_CONFIG = {
 # The browser game is the eval/demo surface (python main.py --demo).
 DQN_CONFIG = {
     # Network: dueling trunk (V/A heads appended internally)
-    # Input is 20 (v2: 15 base + dissolved time features + decision cadence;
-    # see game/dino_env.py). Pre-v2 checkpoints (15-input) are incompatible.
-    "network_layers": [20, 128, 64],
+    # Input is 26 (15 base + 5 v2 + 6 explicit obstacle-class one-hots;
+    # see game/dino_env.py). Earlier checkpoints are incompatible.
+    "network_layers": [26, 128, 64],
 
     # Optimisation
     "lr": 1e-4,
@@ -70,6 +70,12 @@ DQN_CONFIG = {
     "start_speed_min": 6.0,
     "start_speed_max": 12.0,
 
+    # Ablation knobs (for crediting each change). Defaults = full v2 setup.
+    "use_dissolved": True,      # dissolved time features (TTC2, traverse, time-gap)
+    "use_cadence": True,        # decision-cadence feature
+    "eval_metric": "median",    # gate/checkpoint on "median" (robust) or "mean"
+    "seed": None,               # training seed — set for reproducible ablations
+
     # Rewards (constant across ALL phases — never tune these per phase)
     "survival_reward": 0.001,       # per frame, tie-breaker only
     "clear_reward": 1.0,
@@ -84,6 +90,16 @@ DQN_CONFIG = {
     # tricks (e.g. jumping high birds) that collapse under real jitter — making the
     # checkpoint/gate signal non-representative. Still repeatable (fixed seeds).
     "eval_jitter": True,
+    # best_model is selected on a FIXED deployment eval (full game + birds,
+    # jittered), NOT the per-phase eval — otherwise the easy cacti phases hit
+    # the score ceiling and lock best_model to a pre-bird checkpoint, discarding
+    # all the bird learning. Bird-heavy so mid-jumping compounds to failure.
+    "deploy_eval_params": {"birds": True, "max_speed": 13.0, "bird_weight": 0.5},
+    # Full timeout, NOT a short cap: a jumper survives ~12k frames (its bird
+    # failures haven't compounded yet) and hits a short cap identical to a
+    # ducker, saturating selection. At 36k the jumper dies (compounds) while a
+    # ducker reaches the ceiling — so best_model can finally tell them apart.
+    "deploy_eval_max_frames": 36_000,
 
     # Phase-entry exploration (new env ⇒ re-explore briefly)
     "phase_entry_epsilon": 0.25,

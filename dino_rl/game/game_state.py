@@ -99,6 +99,12 @@ class GameState:
             tgap = 1.0
         cadence = self.cadence_frames / 6.0
 
+        # Explicit obstacle-class one-hots — MUST mirror dino_env.bird_class().
+        def bird_class(ob: Optional[Obstacle]):
+            if ob is None or not ob.is_bird:
+                return [0.0, 0.0, 0.0]
+            return [float(ob.y == 100.0), float(ob.y == 75.0), float(ob.y == 50.0)]
+
         return np.array(
             f1 + f2 + [
                 gap,
@@ -110,6 +116,6 @@ class GameState:
                 ttc1,
                 # ── appended v2 features (indices 15–19) ──
                 ttc2, trav1, trav2, tgap, cadence,
-            ],
+            ] + bird_class(o1) + bird_class(o2),   # indices 20–25
             dtype=np.float32,
         )

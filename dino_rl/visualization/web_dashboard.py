@@ -3,6 +3,14 @@
 Starts automatically when DQN training begins.  A background daemon thread
 runs a plain-stdlib HTTP server — no new dependencies.  The page auto-refreshes
 every 2 seconds by polling /data which returns the full episode history as JSON.
+
+The view is organised around the numbers that actually drive the run:
+  * GREEDY EVAL (eval_avg / eval_best) — every control decision keys off this,
+    not the ε-contaminated training score.
+  * EVAL DEATH CAUSES — what is actually killing the policy (cactus vs which
+    bird height), the single most diagnostic panel.
+  * ACTION MIX — jump / duck / run-under usage (the bird-strategy tell).
+  * curriculum phase, ε decay, loss, throughput.
 """
 
 import json
@@ -36,7 +44,7 @@ class DashboardServer:
     def get_data(self) -> dict:
         with self._lock:
             return {
-                "history": list(self._history[-400:]),   # keep last 400 eps
+                "history": list(self._history[-600:]),   # keep last 600 eps
                 "current": dict(self._current),
                 "total_episodes": len(self._history),
             }
@@ -97,59 +105,48 @@ _HTML = r"""<!DOCTYPE html>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0d1117;color:#e6edf3;font-family:'Segoe UI',monospace;font-size:13px}
 
-/* ---- header ---- */
 #hdr{background:#161b22;border-bottom:1px solid #30363d;padding:10px 18px;
-     display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+     display:flex;align-items:center;gap:18px;flex-wrap:wrap}
 #hdr h1{font-size:15px;color:#58a6ff;letter-spacing:1px;white-space:nowrap}
-.kpi{text-align:center;min-width:72px}
+.kpi{text-align:center;min-width:70px}
 .kpi .v{font-size:20px;font-weight:bold;color:#f0f6fc}
 .kpi .l{font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.5px}
 .g .v{color:#3fb950} .c .v{color:#39d2fc} .y .v{color:#e3b341}
 .r .v{color:#f85149} .p .v{color:#bc8cff}
+#modes{display:flex;gap:6px;flex-wrap:wrap}
+.mode{font-size:10px;padding:2px 7px;border-radius:10px;background:#21262d;color:#6e7681;
+      border:1px solid #30363d;text-transform:uppercase;letter-spacing:.5px}
+.mode.on{background:#15301d;color:#3fb950;border-color:#238636}
 #hdr-time{margin-left:auto;font-size:10px;color:#484f58}
 
-/* ---- main grid ---- */
 #main{display:grid;grid-template-columns:2fr 1fr;gap:10px;padding:10px}
-
 .panel{background:#161b22;border:1px solid #30363d;border-radius:6px;padding:12px}
-.panel h2{font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.8px;
-          margin-bottom:8px}
-
+.panel h2{font-size:10px;color:#8b949e;text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px}
+.panel .sub{font-size:10px;color:#6e7681;margin-bottom:8px}
 .chart-wrap{position:relative}
 
-/* ---- action distribution ---- */
 #act-pct{display:flex;gap:0;margin-bottom:10px}
 .act-chip{flex:1;text-align:center;padding:6px 0}
-.act-chip .pv{font-size:26px;font-weight:bold}
+.act-chip .pv{font-size:24px;font-weight:bold}
 .act-chip .pl{font-size:10px;color:#8b949e;text-transform:uppercase}
 .an .pv{color:#8b949e} .aj .pv{color:#39d2fc} .ad .pv{color:#bc8cff}
 
-/* ---- reward breakdown ---- */
-.rw-row{display:flex;justify-content:space-between;padding:4px 2px;
-        border-bottom:1px solid #21262d;font-size:12px}
-.rw-row:last-child{border-bottom:none}
-.rw-lbl{color:#8b949e}
-.pos{color:#3fb950;font-weight:bold} .neg{color:#f85149;font-weight:bold}
+/* death-cause bars */
+.dc{display:flex;align-items:center;gap:8px;margin-bottom:7px;height:18px}
+.dc-name{width:96px;color:#c9d1d9;font-size:11px;flex-shrink:0}
+.dc-track{flex:1;background:#21262d;border-radius:3px;height:14px;overflow:hidden}
+.dc-fill{height:100%;border-radius:3px;transition:width .4s}
+.dc-val{width:30px;text-align:right;font-size:11px;color:#c9d1d9;flex-shrink:0}
+.dc-hint{font-size:9px;color:#6e7681;margin-left:4px}
 
-/* ---- feature bars ---- */
-.fb{display:flex;align-items:center;gap:6px;margin-bottom:4px;height:17px}
-.fb-name{width:32px;color:#8b949e;font-size:10px;text-align:right;flex-shrink:0}
-.fb-track{flex:1;background:#21262d;border-radius:2px;height:9px;overflow:hidden}
-.fb-fill{height:100%;border-radius:2px;transition:width .4s}
-.fb-val{width:38px;text-align:right;font-size:10px;color:#c9d1d9;flex-shrink:0}
-
-/* ---- Q-value bars ---- */
 .qb{display:flex;align-items:center;gap:6px;margin-bottom:8px}
 .qb-name{width:36px;color:#8b949e;font-size:12px;flex-shrink:0}
-.qb-track{flex:1;background:#21262d;border-radius:3px;height:20px;overflow:hidden;
-          position:relative}
+.qb-track{flex:1;background:#21262d;border-radius:3px;height:20px;overflow:hidden}
 .qb-fill{height:100%;border-radius:3px;transition:width .4s}
 .qb-val{width:56px;text-align:right;font-size:12px;flex-shrink:0;font-weight:bold}
 .qb-chosen .qb-track{outline:2px solid #f0f6fc;border-radius:3px}
 
-/* ---- state grid (row 3) ---- */
-#state-row{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;gap:10px}
-
+#bottom{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;gap:10px}
 #footer{padding:4px 12px;font-size:10px;color:#484f58;text-align:right}
 </style>
 </head>
@@ -157,76 +154,68 @@ body{background:#0d1117;color:#e6edf3;font-family:'Segoe UI',monospace;font-size
 
 <div id="hdr">
   <h1>&#11035; DINO RL</h1>
+  <div id="modes">
+    <span class="mode" id="M-jitter">jitter</span>
+    <span class="mode" id="M-randstart">randstart</span>
+    <span class="mode" id="M-evaljit">eval-jitter</span>
+  </div>
   <div class="kpi c"><div class="v" id="H-phase">—</div><div class="l">Phase</div></div>
-  <div class="kpi y"><div class="v" id="H-eval">—</div><div class="l">Eval Avg</div></div>
-  <div class="kpi g"><div class="v" id="H-best">—</div><div class="l">Best Score</div></div>
+  <div class="kpi y"><div class="v" id="H-eval">—</div><div class="l">Eval Median</div></div>
+  <div class="kpi g"><div class="v" id="H-ebest">—</div><div class="l">Eval Best</div></div>
   <div class="kpi c"><div class="v" id="H-ep">—</div><div class="l">Episode</div></div>
-  <div class="kpi y"><div class="v" id="H-avg">—</div><div class="l">Avg (50ep)</div></div>
-  <div class="kpi" ><div class="v" id="H-steps">—</div><div class="l">Total Steps</div></div>
-  <div class="kpi g"><div class="v" id="H-clr">—</div><div class="l">Total Clears</div></div>
-  <div class="kpi p"><div class="v" id="H-bclr">—</div><div class="l">Bird Clears</div></div>
-  <div class="kpi r"><div class="v" id="H-loss">—</div><div class="l">Loss</div></div>
   <div class="kpi p"><div class="v" id="H-eps">—</div><div class="l">Epsilon</div></div>
+  <div class="kpi"  ><div class="v" id="H-steps">—</div><div class="l">Total Steps</div></div>
+  <div class="kpi"  ><div class="v" id="H-sps">—</div><div class="l">Steps/s</div></div>
+  <div class="kpi r"><div class="v" id="H-loss">—</div><div class="l">Loss</div></div>
   <div id="hdr-time"></div>
 </div>
 
 <div id="main">
 
-  <!-- col 1 row 1: score chart -->
+  <!-- hero: eval progression -->
   <div class="panel">
-    <h2>Score Progression</h2>
-    <div class="chart-wrap" style="height:180px"><canvas id="cScore"></canvas></div>
+    <h2>Greedy Eval Progression — the metric every decision keys off</h2>
+    <div class="sub">Gating uses the MEDIAN over the eval seeds (ε=0, fixed seeds, under jitter when enabled). Mean shown faint: when it sits far above the median, one lucky cruise is carrying the score. Training score is ε-contaminated.</div>
+    <div class="chart-wrap" style="height:210px"><canvas id="cEval"></canvas></div>
   </div>
 
-  <!-- col 2 row 1: action distribution -->
+  <!-- eval death causes -->
   <div class="panel">
-    <h2>Action Distribution — latest episode</h2>
+    <h2>Latest Eval — Death Causes</h2>
+    <div class="sub" id="dc-meta">waiting for first eval…</div>
+    <div id="dc-bars"></div>
+  </div>
+
+  <!-- loss + epsilon -->
+  <div class="panel">
+    <h2>Loss &amp; Epsilon Decay</h2>
+    <div class="chart-wrap" style="height:160px"><canvas id="cLoss"></canvas></div>
+  </div>
+
+  <!-- action distribution -->
+  <div class="panel">
+    <h2>Action Mix — latest training episode (incl. exploration)</h2>
     <div id="act-pct">
-      <div class="act-chip an"><div class="pv" id="A-noop">—</div><div class="pl">Noop</div></div>
+      <div class="act-chip an"><div class="pv" id="A-noop">—</div><div class="pl">Noop / run-under</div></div>
       <div class="act-chip aj"><div class="pv" id="A-jump">—</div><div class="pl">Jump</div></div>
       <div class="act-chip ad"><div class="pv" id="A-duck">—</div><div class="pl">Duck</div></div>
     </div>
-    <h2>Action Trend — last 60 episodes</h2>
-    <div class="chart-wrap" style="height:100px"><canvas id="cAction"></canvas></div>
+    <div class="chart-wrap" style="height:90px"><canvas id="cAction"></canvas></div>
   </div>
 
-  <!-- col 1 row 2: loss + epsilon -->
-  <div class="panel">
-    <h2>Loss &amp; Epsilon Decay</h2>
-    <div class="chart-wrap" style="height:150px"><canvas id="cLoss"></canvas></div>
-  </div>
-
-  <!-- col 2 row 2: reward breakdown -->
-  <div class="panel">
-    <h2>Reward Breakdown — latest episode</h2>
-    <div id="rw-list">
-      <div class="rw-row"><span class="rw-lbl">Survival reward</span>               <span class="pos" id="R-surv">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Obstacle cleared  (+50)</span>       <span class="pos" id="R-clr">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Jump sweet  (+10 zone)</span>        <span class="pos" id="R-jsw">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Jump clear  (+30 outcome)</span>     <span class="pos" id="R-jcl">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Duck LOW bird  (+20)</span>           <span class="pos" id="R-dckb">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Idle action  (−8/step)</span>        <span class="neg" id="R-idle">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Airborne spam  (−60)</span>          <span class="neg" id="R-airb">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Jump too early  (−10)</span>         <span class="neg" id="R-jout">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Landing danger  (−35)</span>         <span class="neg" id="R-land">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Wrong duck  (−30)</span>             <span class="neg" id="R-wdck">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Wrong jump  (−10)</span>             <span class="neg" id="R-wjmp">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Noop LOW bird  (−25)</span>          <span class="neg" id="R-wnob">—</span></div>
-      <div class="rw-row"><span class="rw-lbl">Death penalty  (−100)</span>         <span class="neg" id="R-dth">—</span></div>
-    </div>
-  </div>
-
-  <!-- row 3 full-width: features + Q-values -->
-  <div id="state-row">
-    <div class="panel">
-      <h2>Feature Vector — state at episode end</h2>
-      <div id="feat-bars"></div>
-    </div>
+  <div id="bottom">
     <div class="panel">
       <h2>Q-Values — last network decision</h2>
       <div id="q-bars"></div>
-      <h2 style="margin-top:14px">Speed at Death — last 60 episodes</h2>
-      <div class="chart-wrap" style="height:80px"><canvas id="cSpeed"></canvas></div>
+    </div>
+    <div class="panel">
+      <h2>Curriculum &amp; Throughput</h2>
+      <div class="dc"><span class="dc-name">Phase</span><span class="dc-val" id="C-phase" style="width:auto;flex:1;text-align:left;color:#39d2fc">—</span></div>
+      <div class="dc"><span class="dc-name">Eval survived</span><span class="dc-val" id="C-surv" style="width:auto;flex:1;text-align:left;color:#3fb950">—</span></div>
+      <div class="dc"><span class="dc-name">Eval clears</span><span class="dc-val" id="C-clears" style="width:auto;flex:1;text-align:left">—</span></div>
+      <div class="dc"><span class="dc-name">Eval cadence</span><span class="dc-val" id="C-cad" style="width:auto;flex:1;text-align:left">—</span></div>
+      <div class="dc"><span class="dc-name">Buffer</span><span class="dc-val" id="C-buf" style="width:auto;flex:1;text-align:left">—</span></div>
+      <div class="dc"><span class="dc-name">Best train</span><span class="dc-val" id="C-bscore" style="width:auto;flex:1;text-align:left">—</span></div>
     </div>
   </div>
 
@@ -234,231 +223,168 @@ body{background:#0d1117;color:#e6edf3;font-family:'Segoe UI',monospace;font-size
 <div id="footer">auto-refresh every 2 s</div>
 
 <script>
-// ---- feature / Q-value metadata ----
-const FEATS = [
-  {n:'d1',  c:'#39d2fc', tip:'obs1 distance (norm)'},
-  {n:'y1',  c:'#5c9eff', tip:'obs1 y-position: cactus ~1.1-1.2, bird-lo ~1.07, bird-mid ~0.87, bird-hi ~0.60'},
-  {n:'w1',  c:'#5c9eff', tip:'obs1 width'},
-  {n:'b1',  c:'#bc8cff', tip:'obs1 is bird (0=cactus 1=bird)'},
-  {n:'d2',  c:'#39d2fc60',tip:'obs2 distance (norm)'},
-  {n:'y2',  c:'#5c9eff60',tip:'obs2 y-position'},
-  {n:'b2',  c:'#bc8cff60',tip:'obs2 is bird'},
-  {n:'spd', c:'#e3b341', tip:'game speed'},
-  {n:'dy',  c:'#3fb950', tip:'dino height above ground'},
-  {n:'vy',  c:'#f0a050', tip:'dino vertical velocity'},
-  {n:'jmp', c:'#ff7b72', tip:'dino jumping (0/1)'},
-  {n:'duc', c:'#ff7b72', tip:'dino ducking (0/1)'},
-  {n:'ttc', c:'#58a6ff', tip:'time-to-collision (d1/spd)'},
-];
 const Q_COLS = ['#8b949e','#39d2fc','#bc8cff'];
 const Q_LABS = ['noop','jump','duck'];
 
-// ---- build static DOM for feature bars ----
-(function initFeatBars() {
-  const el = document.getElementById('feat-bars');
-  FEATS.forEach(f => {
-    el.insertAdjacentHTML('beforeend', `
-      <div class="fb" title="${f.tip}">
-        <span class="fb-name">${f.n}</span>
-        <div class="fb-track"><div class="fb-fill" id="ff-${f.n}" style="width:0%;background:${f.c}"></div></div>
-        <span class="fb-val"  id="fv-${f.n}">—</span>
-      </div>`);
-  });
+// death-cause rows: cacti (blue) vs birds by required action
+const DCAUSES = [
+  {k:'cactus_small', c:'#39d2fc', hint:'jump'},
+  {k:'cactus_large', c:'#1f9ed1', hint:'jump'},
+  {k:'bird_low',     c:'#3fb950', hint:'jump'},
+  {k:'bird_mid',     c:'#e3b341', hint:'DUCK'},
+  {k:'bird_high',    c:'#f85149', hint:'run under (no jump!)'},
+];
+
+(function initQBars(){
+  const el=document.getElementById('q-bars');
+  Q_LABS.forEach((lab,i)=>el.insertAdjacentHTML('beforeend',`
+    <div class="qb" id="qrow-${lab}">
+      <span class="qb-name">${lab}</span>
+      <div class="qb-track"><div class="qb-fill" id="qf-${lab}" style="width:0%;background:${Q_COLS[i]}"></div></div>
+      <span class="qb-val" id="qv-${lab}">—</span>
+    </div>`));
+})();
+(function initDC(){
+  const el=document.getElementById('dc-bars');
+  DCAUSES.forEach(d=>el.insertAdjacentHTML('beforeend',`
+    <div class="dc">
+      <span class="dc-name">${d.k.replace('_',' ')}</span>
+      <div class="dc-track"><div class="dc-fill" id="dcf-${d.k}" style="width:0%;background:${d.c}"></div></div>
+      <span class="dc-val" id="dcv-${d.k}">0</span>
+      <span class="dc-hint">${d.hint}</span>
+    </div>`));
 })();
 
-(function initQBars() {
-  const el = document.getElementById('q-bars');
-  Q_LABS.forEach((lab, i) => {
-    el.insertAdjacentHTML('beforeend', `
-      <div class="qb" id="qrow-${lab}">
-        <span class="qb-name">${lab}</span>
-        <div class="qb-track"><div class="qb-fill" id="qf-${lab}" style="width:0%;background:${Q_COLS[i]}"></div></div>
-        <span class="qb-val" id="qv-${lab}">—</span>
-      </div>`);
-  });
-})();
-
-// ---- Chart helpers ----
-const darkGrid   = '#21262d';
-const darkTick   = '#484f58';
-const labelColor = '#8b949e';
-const baseOpts = (extra={}) => ({
-  responsive:true, maintainAspectRatio:false, animation:false,
-  plugins:{ legend:{ labels:{ color:labelColor, font:{size:10}, boxWidth:10 } } },
+const darkGrid='#21262d', darkTick='#484f58', labelColor='#8b949e';
+const baseOpts=(extra={})=>({
+  responsive:true,maintainAspectRatio:false,animation:false,
+  plugins:{legend:{labels:{color:labelColor,font:{size:10},boxWidth:10}}},
   scales:{
-    x:{ ticks:{color:darkTick, maxTicksLimit:8, font:{size:10}}, grid:{color:darkGrid} },
-    y:{ ticks:{color:labelColor, font:{size:10}},                grid:{color:darkGrid}, ...extra.y },
-    ...(extra.y2 ? {y2:{type:'linear',position:'right',
-                        ticks:{color:'#e3b341',font:{size:10}},
-                        grid:{drawOnChartArea:false},
-                        min:0, max:1, ...extra.y2}} : {}),
-  },
-  ...extra.top,
+    x:{ticks:{color:darkTick,maxTicksLimit:8,font:{size:10}},grid:{color:darkGrid}},
+    y:{ticks:{color:labelColor,font:{size:10}},grid:{color:darkGrid},...extra.y},
+    ...(extra.y2?{y2:{type:'linear',position:'right',ticks:{color:'#e3b341',font:{size:10}},
+                 grid:{drawOnChartArea:false},min:0,max:1,...extra.y2}}:{}),
+  },...extra.top,
 });
+const mkChart=(id,type,ds,extra={})=>new Chart(document.getElementById(id),
+  {type,data:{labels:[],datasets:ds},options:baseOpts(extra)});
 
-function mkChart(id, type, datasets, extra={}) {
-  return new Chart(document.getElementById(id), {
-    type,
-    data:{ labels:[], datasets },
-    options: baseOpts(extra),
-  });
-}
-
-const cScore = mkChart('cScore','line',[
-  {label:'Score',   data:[], borderColor:'#39d2fc', backgroundColor:'#39d2fc15',
-   borderWidth:1, pointRadius:1, fill:true,  tension:.3},
-  {label:'Best',    data:[], borderColor:'#3fb950', backgroundColor:'transparent',
+const cEval = mkChart('cEval','line',[
+  {label:'Eval median (gate)', data:[], borderColor:'#e3b341', backgroundColor:'#e3b34118',
+   borderWidth:2, pointRadius:0, fill:true, tension:.2},
+  {label:'Eval best',data:[], borderColor:'#3fb950', backgroundColor:'transparent',
    borderWidth:2, pointRadius:0, fill:false, tension:0},
-  {label:'Avg 50',  data:[], borderColor:'#e3b341', backgroundColor:'transparent',
-   borderWidth:1.5, pointRadius:0, fill:false, tension:.4, borderDash:[4,4]},
+  {label:'Eval mean', data:[], borderColor:'#f0a05088', backgroundColor:'transparent',
+   borderWidth:1, pointRadius:0, fill:false, tension:.2, borderDash:[4,3]},
+  {label:'Train score (ε)', data:[], borderColor:'#39d2fc55', backgroundColor:'transparent',
+   borderWidth:1, pointRadius:0, fill:false, tension:.3},
 ]);
-
-const cAction = mkChart('cAction','bar',[
-  {label:'Noop', data:[], backgroundColor:'#8b949e80'},
-  {label:'Jump', data:[], backgroundColor:'#39d2fc80'},
-  {label:'Duck', data:[], backgroundColor:'#bc8cff80'},
-],{
-  y:{ stacked:true, min:0, max:100 },
-  top:{ plugins:{ legend:{ labels:{ color:labelColor, font:{size:9}, boxWidth:8 } } } },
-});
-cAction.options.scales.x.stacked = true;
-cAction.options.scales.y.stacked = true;
-
 const cLoss = mkChart('cLoss','line',[
   {label:'Loss',    data:[], borderColor:'#f85149', backgroundColor:'transparent',
    borderWidth:1.5, pointRadius:0, tension:.3, yAxisID:'y'},
   {label:'Epsilon', data:[], borderColor:'#e3b341', backgroundColor:'transparent',
    borderWidth:1.5, pointRadius:0, tension:.1, yAxisID:'y2'},
 ],{ y2:{} });
+const cAction = mkChart('cAction','bar',[
+  {label:'Noop', data:[], backgroundColor:'#8b949e80'},
+  {label:'Jump', data:[], backgroundColor:'#39d2fc80'},
+  {label:'Duck', data:[], backgroundColor:'#bc8cff80'},
+],{ y:{stacked:true,min:0,max:100},
+    top:{plugins:{legend:{labels:{color:labelColor,font:{size:9},boxWidth:8}}}} });
+cAction.options.scales.x.stacked=true; cAction.options.scales.y.stacked=true;
 
-const cSpeed = mkChart('cSpeed','line',[
-  {label:'Speed at death', data:[], borderColor:'#f0a050', backgroundColor:'#f0a05025',
-   borderWidth:1.5, pointRadius:2, fill:true, tension:.3},
-]);
+const fmtK = v => Math.abs(v)>=1000 ? (v/1000).toFixed(1)+'k' : String(Math.round(v));
 
-// ---- utilities ----
-function rollingAvg(arr, n) {
-  return arr.map((_, i) => {
-    const sl = arr.slice(Math.max(0, i - n + 1), i + 1);
-    return sl.reduce((a, b) => a + b, 0) / sl.length;
-  });
-}
-const fmt1 = v => (v >= 0 ? '+' : '') + v.toFixed(1);
-const fmtK = v => v >= 1000 ? (v/1000).toFixed(1)+'k' : String(v);
+function render(data){
+  const h=data.history, c=data.current||{};
+  if(!h.length) return;
 
-// ---- main render ----
-function render(data) {
-  const h = data.history;
-  const c = data.current || {};
-  if (!h.length) return;
+  // mode chips
+  document.getElementById('M-jitter').classList.toggle('on', !!c.jitter);
+  document.getElementById('M-randstart').classList.toggle('on', !!c.randstart);
+  document.getElementById('M-evaljit').classList.toggle('on', !!c.eval_jitter);
 
-  // Header
-  const scr50  = h.slice(-50).map(e => e.score || 0);
-  const avg50  = scr50.length ? (scr50.reduce((a,b)=>a+b,0)/scr50.length).toFixed(0) : '—';
-  const totClr  = h.reduce((s,e) => s + (e.cleared||0), 0);
-  const totBird = h.reduce((s,e) => s + (e.bird_clears||0), 0);
-  document.getElementById('H-best').textContent  = (c.best||0).toFixed(0);
+  // header
+  document.getElementById('H-phase').textContent = c.phase || '—';
+  document.getElementById('H-phase').style.color = (c.phase_status==='stalled')?'#f85149':'';
+  document.getElementById('H-eval').textContent  = (c.eval_avg!=null)? fmtK(c.eval_avg):'—';
+  document.getElementById('H-ebest').textContent = fmtK(c.eval_best||0);
   document.getElementById('H-ep').textContent    = data.total_episodes;
-  document.getElementById('H-avg').textContent   = avg50;
+  document.getElementById('H-eps').textContent   = (c.epsilon!=null?c.epsilon:1).toFixed(3);
   document.getElementById('H-steps').textContent = fmtK(c.total_steps||0);
-  document.getElementById('H-clr').textContent   = totClr;
-  document.getElementById('H-bclr').textContent  = totBird;
-  document.getElementById('H-loss').textContent  = (c.loss||0).toFixed(2);
-  document.getElementById('H-eps').textContent   = (c.epsilon||1).toFixed(3);
-  var phEl = document.getElementById('H-phase');
-  phEl.textContent = c.phase || '—';
-  phEl.style.color = (c.phase_status === 'stalled') ? '#f85149' : '';
-  document.getElementById('H-eval').textContent = (c.eval_avg != null) ? c.eval_avg : '—';
+  document.getElementById('H-sps').textContent   = fmtK(c.sps||0);
+  document.getElementById('H-loss').textContent  = (c.loss||0).toFixed(3);
   document.getElementById('hdr-time').textContent= new Date().toLocaleTimeString();
 
-  // Score chart
-  const eps    = h.map(e => e.episode);
-  const scores = h.map(e => e.score||0);
-  const bests  = h.map(e => e.best||0);
-  cScore.data.labels           = eps;
-  cScore.data.datasets[0].data = scores;
-  cScore.data.datasets[1].data = bests;
-  cScore.data.datasets[2].data = rollingAvg(scores, 50);
-  cScore.update('none');
+  // eval progression (carry-forward eval values; training score faint)
+  const eps=h.map(e=>e.episode);
+  cEval.data.labels=eps;
+  cEval.data.datasets[0].data=h.map(e=>e.eval_avg!=null?e.eval_avg:null);   // median (gate)
+  cEval.data.datasets[1].data=h.map(e=>e.eval_best||0);
+  cEval.data.datasets[2].data=h.map(e=>e.eval_mean!=null?e.eval_mean:null);
+  cEval.data.datasets[3].data=h.map(e=>e.score||0);
+  cEval.update('none');
 
-  // Action trend (last 60 ep)
-  const act60 = h.slice(-60);
-  const apOf  = (e, k) => (e.action_pct||{})[k]||0;
-  cAction.data.labels           = act60.map(e=>e.episode);
-  cAction.data.datasets[0].data = act60.map(e=>apOf(e,'noop'));
-  cAction.data.datasets[1].data = act60.map(e=>apOf(e,'jump'));
-  cAction.data.datasets[2].data = act60.map(e=>apOf(e,'duck'));
-  cAction.update('none');
-
-  // Action chips (latest ep)
-  const ap = c.action_pct || {};
-  document.getElementById('A-noop').textContent = (ap.noop||0).toFixed(1)+'%';
-  document.getElementById('A-jump').textContent = (ap.jump||0).toFixed(1)+'%';
-  document.getElementById('A-duck').textContent = (ap.duck||0).toFixed(1)+'%';
-
-  // Loss + Epsilon (last 100 ep)
-  const l100 = h.slice(-100);
-  cLoss.data.labels           = l100.map(e=>e.episode);
-  cLoss.data.datasets[0].data = l100.map(e=>e.loss||0);
-  cLoss.data.datasets[1].data = l100.map(e=>e.epsilon||1);
+  // loss + epsilon (last 150)
+  const l=h.slice(-150);
+  cLoss.data.labels=l.map(e=>e.episode);
+  cLoss.data.datasets[0].data=l.map(e=>e.loss||0);
+  cLoss.data.datasets[1].data=l.map(e=>e.epsilon!=null?e.epsilon:1);
   cLoss.update('none');
 
-  // Speed at death (last 60 ep)
-  const s60 = h.slice(-60);
-  cSpeed.data.labels           = s60.map(e=>e.episode);
-  cSpeed.data.datasets[0].data = s60.map(e=>e.speed_at_death||0);
-  cSpeed.update('none');
+  // action mix
+  const ap=c.action_pct||{};
+  document.getElementById('A-noop').textContent=(ap.noop||0).toFixed(0)+'%';
+  document.getElementById('A-jump').textContent=(ap.jump||0).toFixed(0)+'%';
+  document.getElementById('A-duck').textContent=(ap.duck||0).toFixed(0)+'%';
+  const a60=h.slice(-60);
+  cAction.data.labels=a60.map(e=>e.episode);
+  cAction.data.datasets[0].data=a60.map(e=>(e.action_pct||{}).noop||0);
+  cAction.data.datasets[1].data=a60.map(e=>(e.action_pct||{}).jump||0);
+  cAction.data.datasets[2].data=a60.map(e=>(e.action_pct||{}).duck||0);
+  cAction.update('none');
 
-  // Reward breakdown
-  const sr = c.shaped_rewards || {};
-  document.getElementById('R-surv').textContent = fmt1(sr.survival||0);
-  document.getElementById('R-clr').textContent  = fmt1(sr.clearing||0);
-  document.getElementById('R-jsw').textContent  = fmt1(sr.jump_sweet||0);
-  document.getElementById('R-jcl').textContent  = fmt1(sr.jump_clear||0);
-  document.getElementById('R-dckb').textContent = fmt1(sr.duck_bonus||0);
-  document.getElementById('R-idle').textContent = fmt1(sr.idle||0);
-  document.getElementById('R-airb').textContent = fmt1(sr.airborne||0);
-  document.getElementById('R-jout').textContent = fmt1(sr.jump_outer||0);
-  document.getElementById('R-land').textContent = fmt1(sr.landing_danger||0);
-  document.getElementById('R-wdck').textContent = fmt1(sr.wrong_duck||0);
-  document.getElementById('R-wjmp').textContent = fmt1(sr.wrong_jump||0);
-  document.getElementById('R-wnob').textContent = fmt1(sr.wrong_noop_bird||0);
-  document.getElementById('R-dth').textContent  = fmt1(sr.death||0);
-
-  // Feature vector
-  const obs = c.obs_vector || [];
-  FEATS.forEach((f, i) => {
-    const v   = obs[i] != null ? obs[i] : 0;
-    const pct = Math.min(Math.max(v, 0), 1) * 100;
-    document.getElementById('ff-'+f.n).style.width = pct + '%';
-    document.getElementById('fv-'+f.n).textContent  = v.toFixed(3);
+  // latest eval death causes (scan back for the most recent eval round)
+  let dc=null, dcEp=null;
+  for(let i=h.length-1;i>=0;i--){ if(h[i].eval_death_causes){ dc=h[i].eval_death_causes; dcEp=h[i].episode; break; } }
+  const total=dc?Object.values(dc).reduce((a,b)=>a+b,0):0;
+  document.getElementById('dc-meta').textContent = dc
+    ? `episode ${dcEp} · ${total} deaths across ${ (c.eval_episodes||'?') } eval episodes`
+    : 'waiting for first eval…';
+  const mx=dc?Math.max(1,...Object.values(dc)):1;
+  DCAUSES.forEach(d=>{
+    const n=dc?(dc[d.k]||0):0;
+    document.getElementById('dcf-'+d.k).style.width=(n/mx*100)+'%';
+    document.getElementById('dcv-'+d.k).textContent=n;
   });
 
-  // Q-values
-  const qv = c.q_values || [0, 0, 0];
-  const mx = Math.max(...qv.map(Math.abs)) || 1;
-  const best_q_idx = qv.indexOf(Math.max(...qv));
-  Q_LABS.forEach((lab, i) => {
-    const pct = Math.min(Math.abs(qv[i]) / mx * 100, 100);
-    document.getElementById('qf-'+lab).style.width = pct + '%';
-    document.getElementById('qv-'+lab).textContent  = qv[i].toFixed(3);
-    const row = document.getElementById('qrow-'+lab);
-    row.classList.toggle('qb-chosen', i === best_q_idx);
+  // curriculum / throughput
+  document.getElementById('C-phase').textContent  = (c.phase||'—')+(c.phase_status==='stalled'?'  ⚠ STALLED':'');
+  let evRow=null; for(let i=h.length-1;i>=0;i--){ if(h[i].eval_survived!=null){evRow=h[i];break;} }
+  document.getElementById('C-surv').textContent = evRow? `${evRow.eval_survived}/${evRow.eval_n} cruised to timeout`:'—';
+  let evClears=null; for(let i=h.length-1;i>=0;i--){ if(h[i].eval_clears!=null){evClears=h[i].eval_clears;break;} }
+  document.getElementById('C-clears').textContent = evClears!=null? evClears+' obstacles/ep':'—';
+  document.getElementById('C-cad').textContent    = c.eval_jitter? 'jittered '+'(2–6 frames)':'fixed';
+  document.getElementById('C-buf').textContent    = fmtK(c.buffer||0)+' transitions';
+  document.getElementById('C-bscore').textContent = fmtK(c.best||0);
+
+  // q-values
+  const qv=c.q_values||[0,0,0];
+  const mxq=Math.max(...qv.map(Math.abs))||1;
+  const bi=qv.indexOf(Math.max(...qv));
+  Q_LABS.forEach((lab,i)=>{
+    document.getElementById('qf-'+lab).style.width=Math.min(Math.abs(qv[i])/mxq*100,100)+'%';
+    document.getElementById('qv-'+lab).textContent=qv[i].toFixed(3);
+    document.getElementById('qrow-'+lab).classList.toggle('qb-chosen', i===bi);
   });
 }
 
-// ---- poll loop ----
-async function poll() {
-  try {
-    const r = await fetch('/data');
-    if (r.ok) render(await r.json());
-    else document.getElementById('footer').textContent = 'waiting for training…';
-  } catch(_) {
-    document.getElementById('footer').textContent = 'waiting for training…';
-  }
-  setTimeout(poll, 2000);
+async function poll(){
+  try{ const r=await fetch('/data'); if(r.ok) render(await r.json());
+       else document.getElementById('footer').textContent='waiting for training…'; }
+  catch(_){ document.getElementById('footer').textContent='waiting for training…'; }
+  setTimeout(poll,2000);
 }
-
 poll();
 </script>
 </body>

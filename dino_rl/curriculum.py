@@ -62,12 +62,16 @@ PHASES = [
         env_params={"birds": False, "max_speed": 13.0},
         complete_eval_avg=1000.0,
     ),
+    # Single full-game bird phase — SIMPLE curriculum. With explicit
+    # obstacle-class features (bird_low/mid/high one-hots) the per-class action
+    # is easy to learn, and jitter supplies the incentive (jumping mid/high
+    # compounds to failure). No spacing tricks — those introduce spurious cues.
     Phase(
         name="4-birds",
-        description="Full game. Birds at speed ≥ 8.5: low=jump, mid=duck, high=run.",
+        description="Full game: cacti + birds at all heights, realistic density.",
         env_params={"birds": True, "max_speed": 13.0},
         complete_eval_avg=1500.0,
-        stall_evals=40,          # new skill (ducking) — be patient
+        stall_evals=40,
     ),
 ]
 

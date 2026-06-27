@@ -50,16 +50,23 @@ class DQNTrainer:
         self.curriculum = curriculum
         self.start_episode = start_episode
 
+        # Reproducible ablations: seed torch (weight init) BEFORE building the
+        # networks, and numpy (exploration / episode-seed stream) below.
+        self._seed = cfg.get("seed")
+        if self._seed is not None:
+            torch.manual_seed(self._seed)
+
         self.online, self.target = build_networks(cfg["network_layers"])
         self.optimizer = optim.Adam(self.online.parameters(), lr=cfg["lr"])
         self.buffer = ReplayBuffer(cfg["buffer_size"], N_FEATURES)
         self.nstep = NStepAccumulator(cfg["n_step"], cfg["gamma"])
         self.total_steps = 0
         self.best_score = 0.0          # best training score (display only)
-        self.best_eval = 0.0           # best greedy eval (controls checkpoints)
-        self.last_eval = 0.0
+        self.best_eval = 0.0           # best DEPLOYMENT eval (controls best_model)
+        self.last_eval = 0.0           # latest per-phase eval (gating)
+        self.last_deploy = 0.0         # latest deployment eval
         self._last_loss = 0.0
-        self._rng = np.random.default_rng()
+        self._rng = np.random.default_rng(self._seed)
 
         if load_path:
             from logger import load_full_checkpoint
@@ -131,6 +138,8 @@ class DQNTrainer:
             survival_reward=self.cfg["survival_reward"],
             clear_reward=self.cfg["clear_reward"],
             death_reward=self.cfg["death_reward"],
+            use_dissolved=self.cfg.get("use_dissolved", True),
+            use_cadence=self.cfg.get("use_cadence", True),
             seed=seed,
             **self._env_params(),
         )
@@ -156,13 +165,33 @@ class DQNTrainer:
 
     # ── Greedy evaluation — the metric every decision keys off ───────
 
-    def evaluate(self) -> dict:
-        """Run eval_episodes greedy episodes on FIXED seeds (same exam every
-        time, so eval deltas measure the policy, not the obstacle draw)."""
-        scores, clears, causes = [], [], {}
+    def _make_deploy_env(self, seed: Optional[int] = None) -> DinoEnv:
+        """Fixed deployment env (full game + birds, jittered) for best_model
+        selection — independent of the current curriculum phase."""
+        p = self.cfg.get("deploy_eval_params", {"birds": True, "max_speed": 13.0})
+        kwargs = dict(
+            max_frames=self.cfg.get("deploy_eval_max_frames", self.cfg["max_episode_frames"]),
+            survival_reward=self.cfg["survival_reward"],
+            clear_reward=self.cfg["clear_reward"],
+            death_reward=self.cfg["death_reward"],
+            use_dissolved=self.cfg.get("use_dissolved", True),
+            use_cadence=self.cfg.get("use_cadence", True),
+            action_repeat=self.cfg.get("eval_action_repeat") or self.cfg["action_repeat"],
+            seed=seed,
+            **p,
+        )
+        if self.cfg.get("jitter") and self.cfg.get("eval_jitter"):
+            kwargs["action_repeat_min"] = self.cfg["action_repeat_min"]
+            kwargs["action_repeat_max"] = self.cfg["action_repeat_max"]
+        return DinoEnv(**kwargs)
+
+    def _eval_loop(self, make_env, base_seed: int) -> dict:
+        """Greedy (ε=0) eval over eval_episodes FIXED seeds. Gating/checkpointing
+        key off the MEDIAN (and 'survived') so a single cruise can't carry it."""
+        scores, clears, causes, survived = [], [], {}, 0
         for i in range(self.cfg["eval_episodes"]):
-            env = self._make_env(seed=10_000 + i, for_eval=True)
-            obs = env.reset(seed=10_000 + i)
+            env = make_env(base_seed + i)
+            obs = env.reset(seed=base_seed + i)
             done = False
             while not done:
                 obs, _, done, info = env.step(self.online.predict(obs))
@@ -170,12 +199,27 @@ class DQNTrainer:
             clears.append(info["cleared"])
             if info["death_cause"]:
                 causes[info["death_cause"]] = causes.get(info["death_cause"], 0) + 1
+            else:
+                survived += 1
+        s = np.array(scores)
         return {
-            "avg": float(np.mean(scores)),
-            "max": float(np.max(scores)),
+            "median": float(np.median(s)),
+            "mean": float(s.mean()),
+            "p25": float(np.percentile(s, 25)),
+            "max": float(s.max()),
+            "survived": survived,
+            "n": len(scores),
             "clears": float(np.mean(clears)),
             "death_causes": causes,
         }
+
+    def evaluate(self) -> dict:
+        """Per-phase eval (current curriculum env) — drives phase GATING."""
+        return self._eval_loop(lambda sd: self._make_env(seed=sd, for_eval=True), 10_000)
+
+    def deployment_evaluate(self) -> dict:
+        """Fixed full-game-with-birds eval — drives best_model SELECTION."""
+        return self._eval_loop(self._make_deploy_env, 20_000)
 
     # ── Curriculum events ─────────────────────────────────────────────
 
@@ -276,12 +320,19 @@ class DQNTrainer:
 
                 # ── Periodic greedy eval drives everything ────────────
                 eval_result = None
+                deploy_result = None
                 if (ep + 1) % self.cfg["eval_every"] == 0:
-                    eval_result = self.evaluate()
-                    self.last_eval = eval_result["avg"]
+                    metric = self.cfg.get("eval_metric", "median")
+                    eval_result = self.evaluate()                 # phase eval → gating
+                    self.last_eval = eval_result[metric]
 
-                    if self.last_eval > self.best_eval:
-                        self.best_eval = self.last_eval
+                    # best_model on a FIXED deployment eval (full game + birds),
+                    # not the per-phase eval — so easy cacti phases can't lock it
+                    # to a pre-bird checkpoint and discard the bird learning.
+                    deploy_result = self.deployment_evaluate()
+                    self.last_deploy = deploy_result[metric]
+                    if self.last_deploy > self.best_eval:
+                        self.best_eval = self.last_deploy
                         if self.logger:
                             self.logger.save_model(self.online, "best_model")
 
@@ -323,12 +374,15 @@ class DQNTrainer:
                     "buffer": len(self.buffer),
                     "loss": round(self._last_loss, 5),
                     "cleared": ep_cleared,
-                    "bird_clears": 0,
                     "phase": phase_name,
                     "phase_status": phase_status,
-                    "avg20": round(self.last_eval, 1),
                     "total_steps": self.total_steps,
                     "sps": round(sps, 0),
+                    # run mode (for the dashboard banner)
+                    "jitter": bool(self.cfg.get("jitter")),
+                    "randstart": bool(self.cfg.get("randstart")),
+                    "eval_jitter": bool(self.cfg.get("jitter") and self.cfg.get("eval_jitter")),
+                    "eval_episodes": self.cfg.get("eval_episodes"),
                     "death_cause": info.get("death_cause") or "",
                     "action_pct": {
                         "noop": round(ep_actions[0] / total_a * 100, 1),
@@ -339,7 +393,15 @@ class DQNTrainer:
                 }
                 if eval_result:
                     stats["eval_clears"] = round(eval_result["clears"], 1)
-                    stats["eval_death_causes"] = eval_result["death_causes"]
+                    stats["eval_mean"] = round(eval_result["mean"], 1)
+                    stats["eval_survived"] = eval_result["survived"]
+                    stats["eval_n"] = eval_result["n"]
+                if deploy_result:
+                    # dashboard death-cause panel shows DEPLOYMENT failures (the
+                    # full-game bird deaths we actually care about)
+                    stats["eval_deploy"] = round(self.last_deploy, 1)
+                    stats["eval_death_causes"] = deploy_result["death_causes"]
+                    stats["deploy_survived"] = deploy_result["survived"]
 
                 if self.on_episode_end:
                     self.on_episode_end(stats)
