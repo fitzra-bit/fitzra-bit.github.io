@@ -1,0 +1,150 @@
+# Experiment Ledger — Dino RL windup-gate program
+
+*One row per arm. One variable per arm. Every number states its instrument.
+Protocol defined 2026-07-04 (see PROGRESS_REVIEW.md for rationale).*
+
+## Instruments
+
+| Instrument | What it measures | Cost | Status |
+|---|---|---|---|
+| `measure_cadence.py` | Visible frames/decision distribution by speed band, tail percentiles. Zero extra browser reads (no observer effect). | ~5 min | built 2026-07-04 |
+| `gate_battery.py` | P(score ≥ 2,500 from canonical start). Browser (deployment truth) or `--sim` (fast screen; trust pending E1). Wilson 95% CI + death profile. | ~35 min / 20 eps visible; seconds in sim | built 2026-07-04 |
+| `clean_realtime.py` | Full-distance visible score distribution (champion crowning only). | ~2.5 h / 10 eps | reframed to SCORE 2026-07-04 |
+| Trainer `deploy eval` (E0c) | Uncensored per-eval report: gate_pass + p10 + deaths, printed and logged (`deploy_gate` in log.csv). Reporting only — gating/selection still median. | free | added 2026-07-04 |
+| Empirical cadence clock (E1b) | `DinoEnv(cadence_samples=...)`: eval decision timing resampled from the MEASURED real loop (fractional frames; `measurements/cadence_visible_20260705.npy`, n=2000, mean 3.56 std 0.36) instead of uniform 2–6 jitter. `gate_battery --cadence-file`, `measure_cadence --dump`. Rationale: sim errors were structured (−19/−10 on honest checkpoints, +47/+48 on argmax picks) — the eval clock over-randomized vs reality. | free after one 3-min collection | added 2026-07-05. **Calibration result (n=200 each): honest checkpoints tightened — bench 31→38 (visible ~50, err −19→−12), v2b 60→65 (visible ~70, err −10→−5) — but the argmax candidates are UNTOUCHED: candA 98 (visible 50), candB 92 (visible 45).** The uniform clock's phantom 5–6-frame draws explained roughly half the pessimistic bias on honest policies; the candidates' +47 inflation lives elsewhere. **RESOLVED 2026-07-05 with act-latency modeling** (`DinoEnv(act_latency_frames=0.25)`, `gate_battery --act-latency`; action lands after floor+Bernoulli substeps under the previous action, mean-exact dose). Calibration (n=200): bench 51 (visible ~50, **err +1**), v2b 65 (visible ~70, **err −5**). **CALIBRATED SCREEN = `--fe 0.4138 --cadence-file measurements/cadence_visible_20260705.npy --act-latency 0.25`.** The E2 candidates fit NO dose (98→11 across 0.4 frames of latency; Bernoulli-0.25 gives 16/25 vs visible 50/45): their performance is not a stable property but a micro-timing die roll — matches their streaky visible batteries. **New selection criterion: BRITTLENESS = spread between latency-0 and latency-0.414 screens.** v2b spread 1pt (robust); bench 20; candA 87, candB 78 (pathological — auto-reject before visible testing). v2b's real virtue quantified at last: timing robustness. |
+
+**Standing rules:** visible browser is deployment truth · SCORE / gate-pass are
+the metrics · no cross-instrument comparisons · every training arm = 3 seeds ·
+champion promotion only via full protocol (20-ep gate battery + 10-ep
+clean_realtime, visible).
+
+**Known selection flaw (target of E2):** `best_model` updates only on a
+strictly-greater deploy median; once the median saturates at the frame cap
+(25,387.41), best_model freezes at the FIRST checkpoint to hit it.
+
+## Reference points (visible, 2026-07-04)
+
+| Model | Instrument | Result |
+|---|---|---|
+| bench `runs/dqn_20260627_230813` (26-feat) | clean_realtime, 10 eps | median 10,997 · 5/10 cruise · deaths: 5× cactus_large @ spd 7.1–7.7 |
+| v2b `runs/dqn_20260621_191112` (20-feat, `--layers 20,128,64`) | clean_realtime, 10 eps | median 21,704 · 7/10 cruise · deaths: 2× cactus_large (7.1, 8.0), 1× bird_mid (11.4) |
+
+## Phase 0 — Instruments
+
+| ID | What | Result | Verdict |
+|---|---|---|---|
+| E0a | Visible cadence by speed band (windup vs cruise), tails vs trained jitter 2–6 | 2,000 decisions, bench model. ALL: mean 3.56, p99 3.8. **Windup <8 is the ONLY band with tail events: p99 5.1, max 8.7, 1.0% of decisions >6 frames, 0.6% >8.** Mid/cruise: max 4.6, zero >6. | **Cadence spikes beyond the trained 2–6 jitter exist exclusively in the windup band** — where all visible deaths occur. RC-A pinned: not the mean (3.56, well-covered), the *tail*, and only during windup. Elevates E5, reshaped as spike-injection (~1% @ 7–9 frames), NOT a wider uniform range (2–8/2–12 uniform already failed as "over-cranked"). |
+| E0b | Gate battery built + smoke-tested (browser + sim) | Sim mode: bench = **86% gate-pass (CI 78–91), deaths at speed 8.1–13.0, diverse causes, ZERO below 8** — vs visible truth 50% pass, ALL deaths cactus_large @ 7.1–7.7. Browser mode smoke: 2/3 pass, fail = cactus_large @ 7.2 (~5 min total). | Instrument works end-to-end. **Phase 0 complete 2026-07-04.** **E1 preview: sim-with-uniform-2–6-jitter does NOT track visible at the gate — wrong magnitude AND wrong failure mode.** The sim never generates the >6-frame windup spikes E0a found, so it cannot reproduce the windup death. Fidelity fix candidate: spike-injected cadence in sim eval — if that reproduces the visible death profile, sim screening becomes trustworthy. |
+| E0c | Trainer deploy-eval uncensored (gate_pass print + `deploy_gate` CSV column) | done — takes effect on next training run | |
+
+## Phase 1 — Calibration (no training)
+
+| ID | What | Decision rule | Result |
+|---|---|---|---|
+| E1 | Sim vs visible gate battery on same checkpoints (bench, v2b, 3 sweep seeds) | Sim ranks = visible ranks → iterate in sim, confirm visible. Else visible-only + sim fidelity becomes priority bug | **ROOT CAUSE FOUND (pending A/B confirm).** Elimination chain, bench model, capped 7.5 cacti-only: (1) sim jitter 2–6: **100/100**; spike-injected 1%/5%: 82%/78% with wrong death profile → spike hypothesis rejected. (2) Visible real-time: **0/8**, all cactus_large @ 7.3–7.5, warm browser → warmup exonerated. (3) TRUE lockstep-4 in browser: **8/8** → physics constants/geometry/spawn exonerated (note: first lockstep run 5/8 was contaminated — `load_url` reset `__lockstep`, hybrid stepping; driver fixed). (4) Act latency ~4ms flat, pre-death cadence flat (max 4.2) → loop timing exonerated. (5) rAF probe: **display = 145Hz → visible game integrates at fe≈0.414**; sim/lockstep/headless use fe=1. Sub-frame Euler → jump apex ~3px lower, range ~4px shorter — fatal exactly where `multipleSpeed: 7` first spawns triple large cacti (speed 7–8) at minimum jump range. Explains death band 7.1–7.7, headless≠visible, cactus_large exclusivity, and system-load sensitivity. **Causal A/B: `?fixedstep=1` visible real-time capped 7.5 → 8/8 vs 0/8 control. Root cause proven.** RYAN'S CALL: do NOT fix the game — the authentic variable-dt game on the 145Hz display is the deployment truth; the sim matches IT. `DinoEnv` gained `fe` param (physics quantum; 0.4138 = 60/145). **Fidelity validation, fe=0.4138 sim vs visible:** capped 7.5: 0/100 all cactus_large @ 7.1–7.5 (visible: 0/8, same profile — exact). Full game bench: 31% (CI 25–38) vs visible 50% (CI 24–76); v2b: 60% (CI 53–67) vs visible 70% (CI 40–89). Ranking correct, failure mode correct, magnitudes within CI. **VERDICT (revised after E2 confirmation): fe-matched sim is failure-mode-faithful and rank-suggestive, but per-checkpoint point estimates are UNRELIABLE near the edge** — it scored the phase_4 bench checkpoint 97% sim vs 50% visible (E2). Use the sim screen for shortlisting only; every claim requires visible n=20. (`?fixedstep=1` stays as diagnostic scaffolding only.) |
+| E2 | Gate battery over ALL saved checkpoints of recent runs (selection audit) | Any checkpoint ≥80% gate (n=20 visible) + cruise confirmed → new champion, lexicographic selection validated | **JACKPOT (sim screen, fe=0.4138, n=150).** Top finds: `dqn_20260627_230813/phase_4-birds_complete.pt` (= its phase_best) **97%** (CI 92–99, 5 deaths, NOT the gate profile) and `dqn_20260628_123240/best_model.pt` **93%** (CI 88–96). The frozen `best_model` of the same bench run: 30%. v2b best_model: 57%. **The bench RUN had solved the gate; the saturated-median selection discarded the solving checkpoint.** Selected-vs-best-on-disk gaps per run: 30→97, 9→37, 43→43, 93→93 (two runs' best_model froze on bad checkpoints, two got lucky). **Visible confirmation, 97% candidate: 10/20 = 50% (CI 30–70) — NOT PROMOTED** (rule: ≥80%). Death profile ALSO diverged: 5/10 deaths in the opening seconds (score <130, speed 6.3–6.8, first obstacles) — an episode-start transient the sim doesn't reproduce; plus scattered cactus_small and one bird_mid. Two lessons: (a) selection audit stands — best-on-disk ≠ selected — but no free champion; (b) sim point estimates near the edge are off by up to ~47pts per checkpoint. **93% candidate: 9/20 = 45% (CI 26–66) — NOT PROMOTED.** Its visible fails: 4× instant first-cactus (score ≤164), 5× bird_mid (4 at full speed, scores 2,045–2,389 — dies just short repeatedly), 2× cactus_small mid-run. **E2 CLOSED: selection flaw confirmed (best-on-disk ≫ frozen best_model in sim), but neither candidate survived visible confirmation — v2b remains champion (visible gate 70%, median 21,704).** Two NEW visible-only failure modes the fe-sim misses: (1) episode-start instant deaths (both candidates, ~20% of episodes; absent in v2b/bench baselines) — suspect the cadence-feature placeholder on first post-reset decisions; offline action-flip test proposed; (2) full-speed mid-bird deaths (candidate B). Sim-real gap is multi-factor; fe fixed the dominant one (jump arc), not all. 20-feat run dqn_20260620_231150 skipped (checkpoints failed to load). Full table in task output b6kiqjwar. |
+
+## Phase 2 — Training arms (3 seeds each; control = June-28 sweep, measured in E1)
+
+## Roadmap (recentered 2026-07-05, after Phase 0/1 closed)
+
+**Phase 2 — E5: train on the true timing model.** *LAUNCHED 2026-07-05 11:43
+(3 seeds sequential, ~2.5-3h each: `main.py --agent dqn --episodes 2500
+--randstart --seed {0,1,2}`; config carries fe 0.4138 + cadence_file +
+act latency U(0,0.5) train / 0.25 eval + deploy_metric gate_lex +
+deploy_eval_max_frames 36k; uniform --jitter retired, superseded by the
+empirical clock; smoke-tested 55 eps first).* The centerpiece. 3 seeds:
+training env = fe 0.4138 + empirical cadence clock + latency randomization
+(0–0.5fr, so robustness is learned); trainer deploy-eval replaced with the
+calibrated screen + gate-pass selection (kills the saturated-median /
+frozen-best_model bug — the old "selection fix" folds in here); all
+checkpoints kept for audit. Judge: calibrated screen → brittleness spread →
+visible n=20 region scorecard (start/gate/cruise-birds). **Exit: a seed beats
+v2b (visible gate >70%, median >21.7k full-run) with spread <15 — new
+champion + first repeatable recipe. All seeds coin-flip → Phase 3.**
+
+**E5 RESULTS (2026-07-05).** All 3 seeds trained clean (~1-2h each; seed 0
+resumed after an infra crash — `--resume-dir` added to main.py after an
+`--auto` collision nearly corrupted seed 2; contaminated dir quarantined).
+Every seed banked a gate-solving checkpoint via gate-lex selection (final
+policies oscillated as always — seed 1's last deploy evals were 62%/25% while
+its banked best was 16/16; the selection fix is why the peak survived):
+
+| seed | trainer best gate | calibrated screen (n=200) | brittleness spread |
+|---|---|---|---|
+| 1 (`dqn_20260705_134404`) | 16/16 | **94%** (CI 90–97) | 5 |
+| 0 (`dqn_20260705_114306`) | 14/16 | **90%** (CI 85–93) | 4 |
+| 2 (`dqn_20260705_123105`) | 15/16 | **83%** (CI 77–88) | 8 |
+| v2b reference | — | 65% | 1 |
+
+**Seed 1 VISIBLE n=20: 19/20 = 95% (CI 76–99)** — screen predicted 94%
+(instrument dead-on); sole death cactus_large @ 8.6. Windup-gate deaths are
+GONE from all three seeds' residual profiles (deaths scattered, mean speed
+10.5–11.5). **Gate bar (>70% visible) cleared decisively; repeatability
+demonstrated across 3 seeds (83–94% screen, spreads ≤8).**
+
+**CROWN RUN (clean_realtime, 10 eps, 20k-step ceiling, visible):**
+```
+== SCORE — median 22,070  mean 20,937  best 22,395  worst 10,592
+   9/10 reached the ceiling; 1 death: bird_high @ speed 13.0 (score 10,592)
+```
+**PHASE 2 EXIT MET — NEW CHAMPION: `runs/dqn_20260705_134404/best_model.pt`
+(E5 seed 1, 26-feat).** vs v2b: median 22,070 > 21,704 · caps 9/10 > 7/10 ·
+visible gate 95% > 70% · brittleness 5 < 15 · worst-case 10,592 vs 180.
+Emergent behavior (Ryan, observed live): conditional bird strategy — jumps
+birds at comfortable spacing, fast-fall-aborts jumps under high birds and
+full-ducks mid birds when tight. Goal #3 (duck HIGH+MID), never previously
+achieved, emerged from the corrected physics with zero strategy engineering.
+**Phase 3 (data arms) NOT NEEDED — gate solved by the timing model alone.
+Next: Phase 4 (residual bird deaths at speed 13, endurance past the 20k
+cap) + Phase 5 (repeatability certification, commit, docs).**
+Demo: `python main.py --demo --load runs/dqn_20260705_134404/best_model.pt`
+
+**Phase 3 (conditional) — data-distribution arms on the E5 baseline.**
+E3 start-speed rebalance toward 6–7.5; E4 stratified/prioritized replay for
+sub-8 transitions; E6 windup drill last. One variable per arm, 3 seeds,
+same judging. Only if Phase 2 leaves the gate unsolved.
+
+**Phase 4 — the next score frontier.** After gate ≥90% visible: mid-bird
+ducking at speed (the never-achieved skill; candB showed it's the frontier —
+2,045–2,389 deaths) and endurance past the 20k-step measurement cap (raise
+cap for champions; the game is endless). Region scorecard grows:
+start / gate / cruise / birds / endurance. Bird-drill env if needed.
+
+*Phase 4 opening measurements (2026-07-05 evening):*
+- **Endurance farm** (champion, calibrated sim, 30 eps, 200k-frame cap via
+  `gate_battery --sim-max-frames --threshold 999999999`): **median true death
+  score 44,903** (2× the old 20k-step ceiling), p10 5,399; 9/30 outlasted even
+  200k frames (score 64,388 — reported as cause `?`, actually timeouts; TODO
+  separate cap-outs from deaths in summarize). True deaths (21): cactus_small
+  8, cactus_large 7, bird_high 3, bird_mid 3 — **scattered, all ~speed 13, no
+  dominant class**. Frontier = generic top-speed margin, not a missing skill.
+- **Bird scorecard** (`bird_strategy.py --calibrated`, 20 eps): commit-window
+  action mix shows heavy duck usage at all heights — but the window metric
+  conflates airborne fast-fall with ducking (the documented early-jump flaw),
+  so percentages are strategy flavor only. Decisive stat: **0 low-bird deaths
+  in ~1.3M score-units; birds ≈29% of scattered residue.** Bird skills
+  effectively complete (matches Ryan's live observation of conditional
+  ducking/jump-aborts).
+- **Visible ground-truth endurance** (4 eps, 250k-step ceiling, overnight →
+  2026-07-06): **515 · 1,646 · 34,842 · 157,682** (median 18,244, mean 48,671).
+  Deaths: bird_high ×2, bird_mid ×1, cactus_large ×1, mean speed 11.9. The
+  **157,682** run (~2¼ h of play) is the all-time record by ~7× the old cap and
+  exceeds the sim farm's own frame cap 2.4× — the true ceiling is far beyond
+  every instrument so far. Shape agreement with sim (heavy tail, scattered
+  top-speed deaths); weak-n cautions: visible low tail sits below sim p10, and
+  birds are 3/4 of visible deaths vs ~29% in sim. **Phase 4 metric decision:
+  endurance medians need n too large for routine visible runs — operational
+  scorecard = sim endurance median (n=30+, currently 44,903) + visible P(reach
+  20k) (cheap 15-min episodes, currently 9/10); reserve big visible endurance
+  for champion-level claims.**
+
+**Phase 5 — repeatability certification + consolidation.** The original #1
+goal is a PROCESS: rerun the winning config on 3 fresh seeds, all must pass.
+Then: commit the branch (large uncommitted state: instruments, env timing
+model, docs), write the fe/timing chapter into OVERHAUL.md, update README.
+
+*(Retired: jitter-tail spike reshaping (disproven); fixed-step deployment
+(Ryan's call: authentic game is the target). Open low-priority: episode-start
+transient — largely subsumed by brittleness; revisit only if it appears in a
+robust policy.)*

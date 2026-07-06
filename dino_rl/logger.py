@@ -25,9 +25,9 @@ class RunLogger:
     """
 
     _CSV_FIELDS = [
-        "episode", "score", "best", "eval_avg", "eval_best", "cleared",
-        "steps", "epsilon", "buffer", "loss", "phase", "death_cause",
-        "sps", "timestamp",
+        "episode", "score", "best", "eval_avg", "eval_best", "deploy_gate",
+        "cleared", "steps", "epsilon", "buffer", "loss", "phase",
+        "death_cause", "sps", "timestamp",
     ]
 
     def __init__(self, agent: str, cfg: dict, base_dir: str = "runs",
@@ -134,7 +134,8 @@ def load_full_checkpoint(trainer, path: str) -> bool:
         trainer.online.load_state_dict(state["model"])
         trainer.target.load_state_dict(state["target"])
         trainer.optimizer.load_state_dict(state["optimizer"])
-        trainer.epsilon = state["epsilon"]
+        # epsilon is a derived property (of total_steps + stall floor); restoring
+        # total_steps restores it. The stored value is informational only.
         trainer.total_steps = state["total_steps"]
         trainer.best_score = state["best_score"]
         return True

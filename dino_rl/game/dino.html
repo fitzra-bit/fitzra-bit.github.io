@@ -769,13 +769,25 @@ function draw() {
 }
 
 // ── Main loop ────────────────────────────────────────────────────────
+// ?fixedstep=1 — fixed-timestep physics (accumulator): update() always runs
+// with fe=1 regardless of display refresh. On >60Hz displays the variable-dt
+// path integrates the jump in sub-frame Euler steps, producing a LOWER/
+// SHORTER jump arc than the sim/lockstep/60Hz (fe=1) arc — enough to kill
+// tight clears (triple large cacti at speed ~7.5). Fidelity fix, A/B-gated.
+const FIXED_STEP = Q.get('fixedstep') === '1';
+let stepAcc = 0;
 function loop(ts) {
   // Lockstep mode: the agent advances the game via window.stepFrames(),
   // so the real-time rAF loop must NOT also step physics.
   if (window.__lockstep) { animId = null; return; }
   const dt = lastTime !== null ? Math.min(ts - lastTime, 100) : MS_PER_FRAME;
   lastTime = ts;
-  update(dt);
+  if (FIXED_STEP) {
+    stepAcc += dt;
+    while (stepAcc >= MS_PER_FRAME) { update(MS_PER_FRAME); stepAcc -= MS_PER_FRAME; }
+  } else {
+    update(dt);
+  }
   draw();
   animId = requestAnimationFrame(loop);
 }
@@ -811,6 +823,20 @@ window.stepFrames = function (n) {
       return { x: o.x, y: o.y, w: o.w, h: o.h, type: o.type };
     }),
   };
+};
+
+// ── Fidelity-probe hook (test scaffolding, lockstep only) ────────────
+// Deterministic single-obstacle scenario: fixed speed, one cactus group at
+// the right edge, no follow-up spawns (gap 9999). Mirrors the sim-side
+// probe in fidelity_probe.py so jump windows can be compared 1:1.
+window.setupScenario = function (speed, type, group, x) {
+  runner.restart();
+  currentSpeed = speed;
+  const cfg = OB_TYPES[type];
+  obstacles = [{ type: type, x: (x || W), y: cfg.yPos, w: cfg.w * group,
+                 h: cfg.h, gap: 9999, speedOffset: 0, group: group }];
+  obstacleHistory = [type];
+  return true;
 };
 
 // Auto-start: the RL trainer drives the game via JS injection.

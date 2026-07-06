@@ -83,6 +83,7 @@ class DinoEnv:
         bird_weight: Optional[float] = None,   # P(spawn is a bird) when active; None = original uniform
         bird_gap_scale: float = 1.0,           # gap scale after MID/HIGH birds (<1 = tight stream)
         bird_gap_scale_low: float = 1.0,       # gap scale after LOW birds (keep room to land the jump)
+        gap_scale: float = 1.0,                # GLOBAL gap scale (all obstacles) — fast-pacing
         bird_heights: Optional[list] = None,   # allowed bird y's; None = all three
         max_speed: float = 13.0,
         accel: float = 0.001,
@@ -91,6 +92,17 @@ class DinoEnv:
         action_repeat_max: Optional[int] = None,
         start_speed_min: Optional[float] = None,
         start_speed_max: Optional[float] = None,
+        spike_prob: float = 0.0,               # P(cadence spike) per decision, speed-gated
+        spike_min: int = 7,                    # spike draw range (frames/decision)
+        spike_max: int = 9,
+        spike_speed_max: float = 8.0,          # spikes only occur below this speed (E0a)
+        fe: float = 1.0,                       # physics quantum in frames (60/145≈0.414 = Ryan's display)
+        cadence_samples=None,                  # empirical frames/decision (np array, fractional):
+                                               # resampled per decision — replaces uniform jitter so the
+                                               # EVAL clock matches the measured deployment loop
+        act_latency_frames: float = 0.0,       # observe->act delay in frames (measured ~0.25 visible)
+        act_latency_min=None,                  # per-EPISODE uniform draw range (training
+        act_latency_max=None,                  #   robustness: brittleness is trained away)
         use_dissolved: bool = True,      # ablation: zero the dissolved time features
         use_cadence: bool = True,        # ablation: zero the cadence feature
         max_frames: int = 36_000,        # 10 game-minutes cap
@@ -104,6 +116,7 @@ class DinoEnv:
         self.bird_weight = bird_weight
         self.bird_gap_scale = bird_gap_scale
         self.bird_gap_scale_low = bird_gap_scale_low
+        self.gap_scale = gap_scale
         self.bird_heights = bird_heights if bird_heights is not None else OB_TYPES["PTERODACTYL"]["ys"]
         self.max_speed = max_speed
         self.accel = accel
@@ -115,6 +128,21 @@ class DinoEnv:
         self.action_repeat_min = action_repeat_min
         self.action_repeat_max = action_repeat_max
         self._jitter = action_repeat_min is not None and action_repeat_max is not None
+        # Cadence spikes (E0a, 2026-07-04): the VISIBLE browser occasionally
+        # skips 7-9 frames in one decision — but only in the windup (speed <8;
+        # measured 1.0% of windup decisions, max 8.7, zero above speed 8).
+        # Uniform-jitter training/eval never draws >action_repeat_max, so it
+        # cannot represent the event that kills deployed models at the gate.
+        self.spike_prob = spike_prob
+        self.spike_min = spike_min
+        self.spike_max = spike_max
+        self.spike_speed_max = spike_speed_max
+        self.fe = fe
+        self.cadence_samples = None if cadence_samples is None else np.asarray(
+            cadence_samples, dtype=np.float64)
+        self.act_latency_frames = act_latency_frames
+        self.act_latency_min = act_latency_min
+        self.act_latency_max = act_latency_max
         # Random start speed (#2, hard-region enrichment): when set, each TRAINING
         # episode begins at a random speed in [min, max] (clamped to max_speed),
         # so the policy gets full-length practice across all speeds — especially
@@ -154,6 +182,9 @@ class DinoEnv:
             self.speed = float(self.timing_rng.uniform(lo, hi)) if hi > lo else lo
         else:
             self.speed = INITIAL_SPEED
+        if self.act_latency_min is not None and self.act_latency_max is not None:
+            self.act_latency_frames = float(self.timing_rng.uniform(
+                self.act_latency_min, self.act_latency_max))
         self.raw_distance = 0.0
         self.running_time_ms = 0.0
         self.frames = 0
@@ -170,11 +201,7 @@ class DinoEnv:
 
     # ── Step ──────────────────────────────────────────────────────────
 
-    def step(self, action: int):
-        """Apply action, advance action_repeat frames. Returns (obs, r, done, info)."""
-        if self.crashed:
-            raise RuntimeError("step() called on crashed env — call reset()")
-
+    def _apply_action(self, action: int):
         # Action semantics identical to chrome_driver.act():
         # 1 = startJump, 2 = duck on (fast-fall if airborne), 0 = release duck
         if action == 1:
@@ -192,16 +219,46 @@ class DinoEnv:
             self.ducking = False
             self.speed_drop = False
 
+    def step(self, action: int):
+        """Apply action, advance action_repeat frames. Returns (obs, r, done, info)."""
+        if self.crashed:
+            raise RuntimeError("step() called on crashed env — call reset()")
+
         reward = 0.0
         cleared_before = self.cleared
         n_frames = self.action_repeat
-        if self._jitter:
+        if self.cadence_samples is not None:
+            # Empirical deployment clock: fractional frames/decision resampled
+            # from the measured real loop (E0a). Takes precedence over jitter.
+            n_frames = float(self.cadence_samples[
+                int(self.timing_rng.integers(len(self.cadence_samples)))])
+        elif self._jitter:
             n_frames = int(self.timing_rng.integers(
                 self.action_repeat_min, self.action_repeat_max + 1))
-        self.last_n_frames = n_frames   # diagnostic: jitter draw on this step
-        for _ in range(n_frames):
+        if (self.spike_prob > 0.0 and self.speed < self.spike_speed_max
+                and self.timing_rng.random() < self.spike_prob):
+            n_frames = int(self.timing_rng.integers(self.spike_min, self.spike_max + 1))
+        self.last_n_frames = n_frames   # cadence feature value (frames, may be fractional)
+        # n_frames of game time in physics substeps of self.fe frames each
+        # (fe=1.0 → exactly the historical one-call-per-frame loop).
+        # Act latency: in the real loop the action lands ~4ms (≈0.25 frames)
+        # AFTER the observation it was computed from — the game advances k
+        # substeps under the PREVIOUS action state first. startJump then uses
+        # the speed at arrival time, exactly like the browser. k=0 = atomic.
+        n_sub = max(1, round(n_frames / self.fe))
+        # Fractional latency dose: substep resolution (fe≈0.414fr) is coarser
+        # than the measured ~0.25fr latency, so split probabilistically —
+        # k = floor + Bernoulli(frac) keeps the MEAN delay exact.
+        lat_sub = self.act_latency_frames / self.fe
+        k = int(lat_sub)
+        if self.timing_rng.random() < (lat_sub - k):
+            k += 1
+        k = min(k, n_sub - 1)
+        for i in range(n_sub):
+            if i == k:
+                self._apply_action(action)
             self._advance_frame()
-            reward += self.survival_reward
+            reward += self.survival_reward * self.fe
             if self.crashed or self.frames >= self.max_frames:
                 break
 
@@ -219,17 +276,23 @@ class DinoEnv:
         }
         return self._observe(), reward, done, info
 
-    # ── Frame physics (mirrors dino.html update(), fe = 1 frame) ─────
+    # ── Frame physics (mirrors dino.html update() with fe scaling) ────
+    # fe = 1.0 reproduces the game at 60Hz exactly (historical behavior).
+    # fe < 1 reproduces the REAL game on a fast display: dino.html's rAF loop
+    # calls update(dt) per refresh (145Hz → fe ≈ 0.414), and sub-frame Euler
+    # integration yields a LOWER, SHORTER jump arc than fe=1 — the E1 root
+    # cause of the windup gate (proven by fixedstep A/B: 0/8 vs 8/8 visible).
 
     def _advance_frame(self):
-        self.frames += 1
-        self.running_time_ms += MS_PER_FRAME
+        fe = self.fe
+        self.frames += fe
+        self.running_time_ms += MS_PER_FRAME * fe
 
         # Jump physics
         if self.jumping:
             mult = SPEED_DROP_COEFFICIENT if self.speed_drop else 1.0
-            self.dino_y += self.jump_vel * mult
-            self.jump_vel += GRAVITY
+            self.dino_y += self.jump_vel * mult * fe
+            self.jump_vel += GRAVITY * fe
             if self.dino_y < MAX_JUMP_Y and self.jump_vel < DROP_VELOCITY:
                 self.jump_vel = DROP_VELOCITY
             if self.dino_y >= TREX_GROUND_Y:
@@ -240,7 +303,7 @@ class DinoEnv:
 
         # Obstacles move; count clears when they pass the dino
         for ob in self.obstacles:
-            ob.x -= self.speed + ob.speed_offset
+            ob.x -= (self.speed + ob.speed_offset) * fe
             if not ob.counted and ob.x + ob.w < TREX_X:
                 ob.counted = True
                 self.cleared += 1
@@ -256,9 +319,9 @@ class DinoEnv:
                     self._spawn()
 
         # Distance & acceleration
-        self.raw_distance += self.speed
+        self.raw_distance += self.speed * fe
         if self.speed < self.max_speed:
-            self.speed = min(self.max_speed, self.speed + self.accel)
+            self.speed = min(self.max_speed, self.speed + self.accel * fe)
 
         # Collision
         cause = self._collision()
@@ -313,7 +376,10 @@ class DinoEnv:
     def _gap(self, min_gap_type: float, width: float) -> float:
         min_gap = round(width * self.speed + min_gap_type * GAP_COEFFICIENT)
         max_gap = round(min_gap * MAX_GAP_COEFFICIENT)
-        return float(min_gap + self.rng.integers(max(1, max_gap - min_gap)))
+        g = float(min_gap + self.rng.integers(max(1, max_gap - min_gap)))
+        # Global fast-pacing (uniform over ALL obstacle types) — forces minimal-
+        # air-time jumps (fast-fall) and ducking birds, with no per-type confound.
+        return g * self.gap_scale
 
     def _collision(self) -> Optional[str]:
         """Effective collision boxes — identical insets to dino.html."""

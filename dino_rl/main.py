@@ -135,6 +135,9 @@ def _run_genetic_browser(args, cfg):
 
 def run_dqn(args):
     cfg = {**DQN_CONFIG}
+    if getattr(args, "seed", None) is not None:
+        cfg["seed"] = args.seed
+        print(f"Seed: {cfg['seed']}")
     if getattr(args, "jitter", False):
         cfg["jitter"] = True
         print(f"Timing jitter ON: training {cfg['action_repeat_min']}-"
@@ -155,7 +158,17 @@ def run_dqn(args):
     resume_dir, start_episode, load_path = None, 0, args.load
     curriculum = None if args.no_curriculum else Curriculum()
 
-    if args.auto:
+    if getattr(args, "resume_dir", None):
+        from pathlib import Path
+        target = Path(args.resume_dir)
+        if not (target / "state.json").exists():
+            print(f"--resume-dir {target}: no state.json — aborting.")
+            return
+        resume_dir = str(target)
+        checkpoint = target / "checkpoint.pt"
+        if checkpoint.exists():
+            load_path = str(checkpoint)
+    elif args.auto:
         latest = find_latest_run()
         if latest is None:
             print("No resumable run found — starting fresh.")
@@ -414,6 +427,20 @@ def main():
         action="store_true",
         help="DQN training: start episodes at a random speed (start_speed_min–max) "
              "to enrich practice in the data-light bird band. Eval starts at 6.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="DQN training: override config seed (multi-seed experiment arms)",
+    )
+    parser.add_argument(
+        "--resume-dir",
+        default=None,
+        dest="resume_dir",
+        help="Resume a SPECIFIC run dir (safer than --auto when multiple runs "
+             "exist or train in parallel — --auto grabs the newest, which may "
+             "be another live run)",
     )
     args = parser.parse_args()
 
