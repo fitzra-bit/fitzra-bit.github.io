@@ -138,6 +138,9 @@ def run_dqn(args):
     if getattr(args, "seed", None) is not None:
         cfg["seed"] = args.seed
         print(f"Seed: {cfg['seed']}")
+    if getattr(args, "net_layers", None):
+        cfg["network_layers"] = [int(x) for x in args.net_layers.split(",")]
+        print(f"Network: {cfg['network_layers']}")
     if getattr(args, "jitter", False):
         cfg["jitter"] = True
         print(f"Timing jitter ON: training {cfg['action_repeat_min']}-"
@@ -433,6 +436,12 @@ def main():
         type=int,
         default=None,
         help="DQN training: override config seed (multi-seed experiment arms)",
+    )
+    parser.add_argument(
+        "--net-layers",
+        default=None,
+        dest="net_layers",
+        help="DQN training: override network_layers, e.g. 26,256,128 (capacity arms)",
     )
     parser.add_argument(
         "--resume-dir",
