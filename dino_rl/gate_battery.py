@@ -115,37 +115,42 @@ def run_browser(args, net, n_in):
     return results
 
 
-def run_sim(args, net, n_in):
+def _make_sim_env(args, cfg, seed, cadence):
     from game.dino_env import DinoEnv
-    cfg = DQN_CONFIG
     p = cfg.get("deploy_eval_params", {"birds": True, "max_speed": 13.0})
+    kwargs = dict(
+        action_repeat=cfg.get("eval_action_repeat") or cfg["action_repeat"],
+        use_dissolved=cfg.get("use_dissolved", True),
+        use_cadence=cfg.get("use_cadence", True),
+        max_frames=args.sim_max_frames,
+        seed=seed,
+        **p,
+    )
+    if args.maxspeed:
+        kwargs["max_speed"] = args.maxspeed
+    if args.no_birds:
+        kwargs["birds"] = False
+    if not args.no_jitter:
+        kwargs["action_repeat_min"] = cfg["action_repeat_min"]
+        kwargs["action_repeat_max"] = cfg["action_repeat_max"]
+    if args.spike_prob > 0.0:
+        kwargs["spike_prob"] = args.spike_prob
+    if args.fe != 1.0:
+        kwargs["fe"] = args.fe
+    if cadence is not None:
+        kwargs["cadence_samples"] = cadence
+    if args.act_latency > 0.0:
+        kwargs["act_latency_frames"] = args.act_latency
+    return DinoEnv(**kwargs)
+
+
+def run_sim(args, net, n_in):
+    cfg = DQN_CONFIG
+    cadence = np.load(args.cadence_file) if args.cadence_file else None
     results = []
     for ep in range(args.episodes):
         seed = args.seed + ep
-        kwargs = dict(
-            action_repeat=cfg.get("eval_action_repeat") or cfg["action_repeat"],
-            use_dissolved=cfg.get("use_dissolved", True),
-            use_cadence=cfg.get("use_cadence", True),
-            max_frames=args.sim_max_frames,
-            seed=seed,
-            **p,
-        )
-        if args.maxspeed:
-            kwargs["max_speed"] = args.maxspeed
-        if args.no_birds:
-            kwargs["birds"] = False
-        if not args.no_jitter:
-            kwargs["action_repeat_min"] = cfg["action_repeat_min"]
-            kwargs["action_repeat_max"] = cfg["action_repeat_max"]
-        if args.spike_prob > 0.0:
-            kwargs["spike_prob"] = args.spike_prob
-        if args.fe != 1.0:
-            kwargs["fe"] = args.fe
-        if args.cadence_file:
-            kwargs["cadence_samples"] = np.load(args.cadence_file)
-        if args.act_latency > 0.0:
-            kwargs["act_latency_frames"] = args.act_latency
-        env = DinoEnv(**kwargs)
+        env = _make_sim_env(args, cfg, seed, cadence)
         obs = env.reset(seed=seed)[:n_in]
         passed = False
         info = {"score": 0.0, "speed": 0.0, "death_cause": None}
@@ -162,6 +167,70 @@ def run_sim(args, net, n_in):
     return results
 
 
+def run_sim_failure_budget(args, net, n_in):
+    """Run-until-k-deaths endurance. Keeps playing UNCAPPED episodes until
+    --until-deaths deaths accumulate (or --max-episodes safety). Reports mean
+    score between deaths (MSBD) as a Poisson rate — the metric that keeps
+    discriminating after pass-rate and capped-median batteries saturate (E8
+    pinned the fixed-n endurance farm). Episodes that hit the frame cap without
+    dying are right-censored: their score counts as exposure, not as a death."""
+    cfg = DQN_CONFIG
+    cadence = np.load(args.cadence_file) if args.cadence_file else None
+    total_exposure = 0.0            # sum of scores over ALL episodes (Poisson exposure)
+    deaths = 0
+    capouts = 0
+    death_scores, death_speeds = [], []
+    causes = Counter()
+    ep = 0
+    while deaths < args.until_deaths and ep < args.max_episodes:
+        seed = args.seed + ep
+        env = _make_sim_env(args, cfg, seed, cadence)
+        obs = env.reset(seed=seed)[:n_in]
+        info = {"score": 0.0, "speed": 0.0, "death_cause": None, "timeout": False}
+        done = False
+        while not done:
+            obs, _, done, info = env.step(net.predict(obs))
+            obs = obs[:n_in]
+        total_exposure += info["score"]
+        if info.get("timeout"):        # hit frame cap alive → censored
+            capouts += 1
+            tag = "CAP "
+        else:
+            deaths += 1
+            death_scores.append(info["score"])
+            death_speeds.append(info["speed"])
+            causes[info["death_cause"] or "?"] += 1
+            tag = "DIE "
+        ep += 1
+        print(f"  ep {ep:3d}: {tag} score {info['score']:8.0f}  "
+              f"(deaths {deaths}/{args.until_deaths}, capouts {capouts})")
+    summarize_endurance(total_exposure, deaths, capouts, ep,
+                        death_scores, death_speeds, causes, args.sim_max_frames)
+
+
+def summarize_endurance(exposure, deaths, capouts, episodes,
+                        death_scores, death_speeds, causes, frame_cap):
+    print(f"\n== ENDURANCE (uncapped-to-death, {episodes} eps, frame cap {frame_cap:,}):")
+    print(f"   total exposure {exposure:,.0f} score-units  |  {deaths} deaths, "
+          f"{capouts} cap-outs ({100 * capouts / max(episodes, 1):.0f}% survived the cap)")
+    if deaths == 0:
+        print(f"   MSBD > {exposure:,.0f} (ZERO deaths — model outlives the instrument; "
+              f"raise --sim-max-frames or --until-deaths not reached)")
+        return
+    msbd = exposure / deaths
+    # Poisson count SE ≈ sqrt(deaths); log-normal CI on the rate (needs no scipy).
+    rel = 1.96 / math.sqrt(deaths)
+    lo, hi = msbd * math.exp(-rel), msbd * math.exp(rel)
+    print(f"   MSBD (mean score between deaths) = {msbd:,.0f}  "
+          f"(95% CI {lo:,.0f}-{hi:,.0f})")
+    ds = np.array(death_scores)
+    print(f"   death scores: median {np.median(ds):,.0f}  min {ds.min():,.0f}  "
+          f"max {ds.max():,.0f}")
+    sp = np.array(death_speeds)
+    print(f"   death speed mean {sp.mean():.1f} range {sp.min():.1f}-{sp.max():.1f}  "
+          f"causes {dict(causes.most_common())}")
+
+
 def main(args):
     layers = ([int(x) for x in args.layers.split(",")] if args.layers
               else DQN_CONFIG["network_layers"])
@@ -169,6 +238,12 @@ def main(args):
     net = QNetwork(layers)
     load_model(net, args.load)
     net.eval()
+
+    if args.until_deaths > 0:
+        if not args.sim:
+            raise SystemExit("--until-deaths is a sim-only endurance instrument")
+        run_sim_failure_budget(args, net, n_in)
+        return
 
     results = run_sim(args, net, n_in) if args.sim else run_browser(args, net, n_in)
     summarize(results, args.threshold)
@@ -183,6 +258,13 @@ if __name__ == "__main__":
     ap.add_argument("--sim-max-frames", type=int, default=36_000, dest="sim_max_frames",
                     help="sim episode frame cap; raise (with a huge --threshold) "
                          "for ENDURANCE runs — where does the model really die?")
+    ap.add_argument("--until-deaths", type=int, default=0, dest="until_deaths",
+                    help="failure-budget endurance (sim): play uncapped episodes "
+                         "until this many deaths, report mean-score-between-deaths "
+                         "(MSBD) with Poisson CI. Pair with a high --sim-max-frames "
+                         "(e.g. 1000000). Discriminates past pass-rate saturation.")
+    ap.add_argument("--max-episodes", type=int, default=500, dest="max_episodes",
+                    help="safety cap on episode count for --until-deaths runs")
     ap.add_argument("--no-jitter", action="store_true", dest="no_jitter",
                     help="sim only: fixed eval_action_repeat instead of jitter")
     ap.add_argument("--seed", type=int, default=50_000, help="sim base seed")

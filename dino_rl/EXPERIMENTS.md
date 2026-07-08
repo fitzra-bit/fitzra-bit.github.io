@@ -13,10 +13,14 @@ Protocol defined 2026-07-04 (see PROGRESS_REVIEW.md for rationale).*
 | Trainer `deploy eval` (E0c) | Uncensored per-eval report: gate_pass + p10 + deaths, printed and logged (`deploy_gate` in log.csv). Reporting only — gating/selection still median. | free | added 2026-07-04 |
 | Empirical cadence clock (E1b) | `DinoEnv(cadence_samples=...)`: eval decision timing resampled from the MEASURED real loop (fractional frames; `measurements/cadence_visible_20260705.npy`, n=2000, mean 3.56 std 0.36) instead of uniform 2–6 jitter. `gate_battery --cadence-file`, `measure_cadence --dump`. Rationale: sim errors were structured (−19/−10 on honest checkpoints, +47/+48 on argmax picks) — the eval clock over-randomized vs reality. | free after one 3-min collection | added 2026-07-05. **Calibration result (n=200 each): honest checkpoints tightened — bench 31→38 (visible ~50, err −19→−12), v2b 60→65 (visible ~70, err −10→−5) — but the argmax candidates are UNTOUCHED: candA 98 (visible 50), candB 92 (visible 45).** The uniform clock's phantom 5–6-frame draws explained roughly half the pessimistic bias on honest policies; the candidates' +47 inflation lives elsewhere. **RESOLVED 2026-07-05 with act-latency modeling** (`DinoEnv(act_latency_frames=0.25)`, `gate_battery --act-latency`; action lands after floor+Bernoulli substeps under the previous action, mean-exact dose). Calibration (n=200): bench 51 (visible ~50, **err +1**), v2b 65 (visible ~70, **err −5**). **CALIBRATED SCREEN = `--fe 0.4138 --cadence-file measurements/cadence_visible_20260705.npy --act-latency 0.25`.** The E2 candidates fit NO dose (98→11 across 0.4 frames of latency; Bernoulli-0.25 gives 16/25 vs visible 50/45): their performance is not a stable property but a micro-timing die roll — matches their streaky visible batteries. **New selection criterion: BRITTLENESS = spread between latency-0 and latency-0.414 screens.** v2b spread 1pt (robust); bench 20; candA 87, candB 78 (pathological — auto-reject before visible testing). v2b's real virtue quantified at last: timing robustness. |
 
-**Standing rules:** visible browser is deployment truth · SCORE / gate-pass are
-the metrics · no cross-instrument comparisons · every training arm = 3 seeds ·
-champion promotion only via full protocol (20-ep gate battery + 10-ep
-clean_realtime, visible).
+| Failure-budget endurance (E9 / Phase 5) | `gate_battery --sim --until-deaths K`: plays UNCAPPED episodes until K deaths, reports **mean score between deaths (MSBD)** as a Poisson rate with log-normal CI. Cap-outs are right-censored (score = exposure, not a death). Replaces fixed-n pass-rate / capped-median farms, which E8 SATURATED (29/30 cap-outs, all percentiles = the cap). Discriminates arbitrarily far into near-perfection. | scales with model quality (bad models die fast, good models run long) | added 2026-07-07. Validated on champion: instrument counts deaths vs cap-outs, computes MSBD+CI, surfaces death causes (caught the early-game watch item: cactus_small @ 7.2). |
+
+**Standing rules:** visible browser is deployment truth · SCORE / gate-pass /
+**MSBD** are the metrics · no cross-instrument comparisons · every training arm
+= 3 seeds · champion promotion only via full protocol (20-ep gate battery +
+10-ep clean_realtime, visible) · **near-perfection (>90% gate): pass-rate
+saturates — use MSBD + failure-budget; pre-register bars and stop batteries
+early once the outcome is locked (sequential stopping)**.
 
 **Known selection flaw (target of E2):** `best_model` updates only on a
 strictly-greater deploy median; once the median saturates at the frame cap
@@ -155,3 +159,22 @@ model, docs), write the fe/timing chapter into OVERHAUL.md, update README.
 (Ryan's call: authentic game is the target). Open low-priority: episode-start
 transient — largely subsumed by brittleness; revisit only if it appears in a
 robust policy.)*
+
+### Phase 5 execution (launched 2026-07-07)
+
+**E8-recipe certification** — the E8 config (`[26,256,128]`, control budget,
+true timing model, gate-lex) on 3 FRESH seeds (0, 2, 3; `--net-layers
+26,256,128`). Pre-registered **certification rule: every seed banks a
+checkpoint with calibrated gate ≥90%, brittleness spread <15, AND ≥80%
+endurance-farm cap-outs (24/30 @200k) — same instruments E8 was adopted on.**
+All 3 pass → recipe certified reproducible. Training done (banked deploy
+evals: seed 0 16/16, seed 2 15/16, seed 3 16/16); screening in progress.
+
+| seed | run dir | calibrated gate | brittleness | endurance cap-outs | verdict |
+|---|---|---|---|---|---|
+| 0 | `dqn_20260707_123333` | *(screening)* | | | |
+| 2 | `dqn_20260707_123423` | | | | |
+| 3 | `dqn_20260707_152625` | | | | |
+
+Deliverables: failure-budget instrument (`--until-deaths`, MSBD) — DONE;
+OVERHAUL.md timing chapter; README; merge branch.

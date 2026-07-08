@@ -23,9 +23,36 @@ No Chrome needed for training. After **any** stop — crash, Ctrl+C, reboot:
 python main.py --agent dqn --auto   # resumes mid-phase, nothing lost
 ```
 
-Watch progress at **http://localhost:8765** — the **Eval Avg** number (greedy
-evaluation on fixed seeds) is the metric that drives everything: phase gates,
-best checkpoints, stall detection.
+Watch progress at **http://localhost:8765**. **Eval Avg** (greedy eval on fixed
+seeds) drives phase gates and stall detection; **Deploy GATE %** — P(reach the
+windup gate, score ≥2,500) — drives `best_model` selection (gate-lex). Median
+alone was retired: it saturates at the frame cap and froze selection.
+
+## Current champion & deployment timing (2026-07-07)
+
+The metric that matters is **SCORE in the real-time, visible browser** — the
+game as actually played. A long investigation (`EXPERIMENTS.md`,
+`PROGRESS_REVIEW.md`) traced a persistent windup-band failure to the display's
+refresh rate, not the agent: at 145 Hz the game sub-frame-integrates the jump
+to a shorter arc than the sim used in training. The fix keeps the authentic
+game and matches the sim to it — `DinoEnv` now models the true physics quantum
+(`fe`), the measured decision clock (`cadence_samples`), and act latency.
+
+```bash
+# Watch the champion (26-feature [26,256,128], trained on the true timing model)
+python main.py --demo --load models/validated_capacity_20260707/best_model.pt
+```
+
+| Champion | visible gate | full-run median | endurance (200k-frame farm) |
+|---|---|---|---|
+| `validated_capacity_20260707` (E8) | 95% | 22,220 | 29/30 survive (no death) |
+| `validated_timing_20260705` (E5, prior) | 95% | 22,070 | — |
+| v2b (pre-timing-fix) | ~70% | 21,704 | 21/30 die |
+
+Judge a checkpoint: `python gate_battery.py --load <m> --episodes 20` (visible)
+or add `--sim --fe 0.4138 --cadence-file measurements/cadence_visible_20260705.npy
+--act-latency 0.25` for the calibrated fast screen. Endurance past the score
+cap: `--until-deaths K` (mean-score-between-deaths, for near-perfect models).
 
 ## The game
 
@@ -41,7 +68,7 @@ original's physics constants and pacing:
 | Obstacle gaps | `width·speed + minGap·0.6` … ×1.5, per original formula |
 | Cactus groups | up to 3, gated by speed (small >4, large >7) |
 | Birds | speed ≥ 8.5, three heights: low=jump, mid=duck, high=run under |
-| Physics | dt-based (frame-rate independent — stable under parallel load) |
+| Physics | dt-based, variable timestep — **NOT frame-rate independent**: on a 145 Hz display it sub-frame-integrates (`fe≈0.414`) to a shorter jump arc than the sim's `fe=1`. This was the "windup gate" root cause (see OVERHAUL.md); the sim now matches it via `DinoEnv(fe=…)`. |
 
 **Curriculum control is via URL params, not file edits:**
 
@@ -108,9 +135,11 @@ through the curriculum far faster in wall-clock and in a tiny genome.
 > the champion maxes out the window. See
 > `models/genetic_validated_20260612_fixed/README.md` for the full before/after.
 
-Validated checkpoints live in `models/`:
+Validated checkpoints live in `models/` (newest first):
 
-- `models/validated_20260612/` — DQN champion (eval 11,087, browser-transfer confirmed)
+- `models/validated_capacity_20260707/` — **current champion** (E8, 26-feat `[26,256,128]`, true timing model; needs `--layers 26,256,128` in diagnostics)
+- `models/validated_timing_20260705/` — E5 champion (26-feat, first trained on the true timing model)
+- `models/validated_20260612/` — sim-era DQN (eval 11,087; browser transfer only under lockstep — see OVERHAUL.md correction)
 - `models/genetic_validated_20260612_fixed/` — GA champion (eval 11,087, adaptive cap)
 - `models/genetic_validated_20260612/` — first GA run (eval 3,413, **superseded** — fixed-cap artifact)
 
@@ -168,7 +197,13 @@ dino_rl/
     └── web_dashboard.py        # http://localhost:8765 — charts + phase status
 ```
 
-## State features (15)
+## State features (26)
+
+> Lineage: **15** (overhaul) → **20** (v2: dissolved-time + cadence features)
+> → **26** (explicit bird-class one-hots: low/mid/high). The 15-feature core
+> below is unchanged; v2 adds indices 15–19 (ttc2, traverse1/2, time-gap,
+> cadence) and 20–25 (obs1/obs2 bird-class one-hots). Load older checkpoints
+> with their matching `--layers` (e.g. `20,128,64` for v2b).
 
 Identical layout in sim (`dino_env._observe`) and browser
 (`game_state.to_array`) — that parity is what lets a sim-trained network
