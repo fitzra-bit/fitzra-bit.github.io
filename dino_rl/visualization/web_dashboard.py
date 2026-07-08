@@ -161,6 +161,7 @@ body{background:#0d1117;color:#e6edf3;font-family:'Segoe UI',monospace;font-size
   </div>
   <div class="kpi c"><div class="v" id="H-phase">—</div><div class="l">Phase</div></div>
   <div class="kpi y"><div class="v" id="H-eval">—</div><div class="l">Eval Median</div></div>
+  <div class="kpi g"><div class="v" id="H-gate">—</div><div class="l">Deploy GATE %</div></div>
   <div class="kpi g"><div class="v" id="H-ebest">—</div><div class="l">Eval Best</div></div>
   <div class="kpi c"><div class="v" id="H-ep">—</div><div class="l">Episode</div></div>
   <div class="kpi p"><div class="v" id="H-eps">—</div><div class="l">Epsilon</div></div>
@@ -308,6 +309,7 @@ function render(data){
   document.getElementById('H-phase').textContent = c.phase || '—';
   document.getElementById('H-phase').style.color = (c.phase_status==='stalled')?'#f85149':'';
   document.getElementById('H-eval').textContent  = (c.eval_avg!=null)? fmtK(c.eval_avg):'—';
+  document.getElementById('H-gate').textContent  = (c.deploy_gate!=null)? Math.round(c.deploy_gate*100)+'%':'—';
   document.getElementById('H-ebest').textContent = fmtK(c.eval_best||0);
   document.getElementById('H-ep').textContent    = data.total_episodes;
   document.getElementById('H-eps').textContent   = (c.epsilon!=null?c.epsilon:1).toFixed(3);

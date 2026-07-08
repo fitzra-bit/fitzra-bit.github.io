@@ -32,11 +32,18 @@ def main(args):
     global_actions = Counter()
 
     for ep in range(args.episodes):
-        env = DinoEnv(birds=True, max_speed=13.0, action_repeat=4, seed=ep)
+        kwargs = dict(birds=True, max_speed=13.0, action_repeat=4, seed=ep,
+                      max_frames=args.max_frames)
+        if args.calibrated:
+            # E1b deployment timing: true arc, empirical clock, act latency
+            kwargs.update(fe=0.4138, act_latency_frames=0.25,
+                          cadence_samples=np.load(
+                              "measurements/cadence_visible_20260705.npy"))
+        env = DinoEnv(**kwargs)
         obs = env.reset(seed=ep)
         done = False
         while not done:
-            a = int(net.predict(obs))
+            a = int(net.predict(obs[:args.layers]))
             global_actions[a] += 1
             # If a bird is the imminent front obstacle, log the action
             ahead = [o for o in env.obstacles if not o.counted]
@@ -64,6 +71,9 @@ def main(args):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--load", required=True)
-    ap.add_argument("--layers", type=int, default=20, help="input dim (15 or 20)")
+    ap.add_argument("--layers", type=int, default=26, help="input dim (15/20/26)")
     ap.add_argument("--episodes", type=int, default=150)
+    ap.add_argument("--max-frames", type=int, default=36_000, dest="max_frames")
+    ap.add_argument("--calibrated", action="store_true",
+                    help="run under the E1b deployment timing model")
     main(ap.parse_args())

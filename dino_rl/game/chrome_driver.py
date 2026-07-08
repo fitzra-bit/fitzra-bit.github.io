@@ -179,6 +179,11 @@ class DinoDriver:
             # load the dino game page — swallow the error and continue.
             pass
         time.sleep(1.0)
+        # Navigation resets the page's JS context: __lockstep goes false and the
+        # wall-clock rAF loop restarts. Re-assert lockstep or step() calls would
+        # run CONCURRENTLY with real-time stepping (hybrid, non-deterministic).
+        if self.lockstep:
+            self._enable_lockstep()
         self._start_game()
         time.sleep(0.5)
         raw = self._raw_state()

@@ -59,7 +59,16 @@ DQN_CONFIG = {
     # so the gating signal is deterministic and deployment-representative.
     "jitter": False,
     "action_repeat_min": 2,
-    "action_repeat_max": 6,
+    "action_repeat_max": 6,     # MATCHED to the real loop (~4 frames/decision,
+                                # range ~2-6). Cranking past this (2-8, 2-12)
+                                # mis-calibrated timing and degraded real-time.
+                                # Incentive for control/ducking comes from PACING
+                                # (train_gap_scale), decoupled from jitter.
+    # Global fast-pacing for TRAINING (not deploy): uniform tight spacing forces
+    # minimal-air-time jumps (fast-fall) + ducking. Calibrated: top-speed cacti
+    # have little slack (even optimal play fails below ~0.85), so kept mild.
+    # Deploy eval stays at normal pace (1.0) to select for real-game performance.
+    "train_gap_scale": 0.85,
     "eval_action_repeat": 4,
 
     # Random start speed (#2) — opt-in via --randstart. Each TRAINING episode
@@ -95,11 +104,26 @@ DQN_CONFIG = {
     # the score ceiling and lock best_model to a pre-bird checkpoint, discarding
     # all the bird learning. Bird-heavy so mid-jumping compounds to failure.
     "deploy_eval_params": {"birds": True, "max_speed": 13.0, "bird_weight": 0.5},
-    # Full timeout, NOT a short cap: a jumper survives ~12k frames (its bird
-    # failures haven't compounded yet) and hits a short cap identical to a
-    # ducker, saturating selection. At 36k the jumper dies (compounds) while a
-    # ducker reaches the ceiling — so best_model can finally tell them apart.
+    # Gate-focused: selection keys on gate_pass (see deploy_metric), so the
+    # cap only needs enough headroom to separate cruisers; 36k = 10 game-min.
+    # (The old 80k cap + median selection saturated and froze best_model.)
     "deploy_eval_max_frames": 36_000,
+
+    # ── E5: the TRUE deployment timing model (measured 2026-07-04/05) ──
+    # The visible game on the 145Hz display integrates physics at fe≈0.414
+    # (shorter jump arc than fe=1 — the E1 root cause), decides every ~3.56
+    # frames (narrow empirical distribution, NOT uniform 2-6), and applies
+    # actions ~0.25 frames after the observation. Training in this world +
+    # latency randomization = robustness is learned, not hoped for.
+    "fe": 0.4138,                    # 60/145 — physics quantum in frames
+    "cadence_file": "measurements/cadence_visible_20260705.npy",
+    "act_latency_train_min": 0.0,    # per-EPISODE uniform draw during training
+    "act_latency_train_max": 0.5,    #   (brittleness is trained away)
+    "act_latency_eval": 0.25,        # measured mean — the calibrated screen
+    # best_model selection: "gate_lex" = gate_pass primary (P(score≥2500) on
+    # the deploy eval), median tiebreak. The saturated-median selector
+    # provably discarded gate-solving checkpoints (E2).
+    "deploy_metric": "gate_lex",
 
     # Phase-entry exploration (new env ⇒ re-explore briefly)
     "phase_entry_epsilon": 0.25,

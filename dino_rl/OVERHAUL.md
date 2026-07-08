@@ -258,9 +258,80 @@ capacity. Eval always starts at the canonical speed 6.
 | sim / lockstep browser | 11,087 | 11,087 |
 | **real-time `--demo` browser** | **~273** (dies speed 7–9) | **~3,300+, 5/6 cruise** |
 
+## The true deployment timing model — the windup gate (2026-07-04/07)
+
+The 2026-06-20 jitter work made real-time play *viable* (~3,300) but a hard
+failure remained that no amount of jitter, curriculum, or data rebalancing
+fixed: every model died at **large cacti in the speed 7.1–7.7 windup band**,
+~50% of runs, while cruising flawlessly once past it. Two weeks of theories
+(sample scarcity, cadence spikes, high-bird strategy) missed it because the
+cause was not in the agent at all. Full forensic record: `EXPERIMENTS.md`.
+
+### Root cause: sub-frame integration on a high-refresh display
+
+`dino.html`'s real-time loop is variable-timestep: each `requestAnimationFrame`
+calls `update(dt)` with `fe = dt / MS_PER_FRAME`. On a **145 Hz** display
+`fe ≈ 0.414`, so the Euler-integrated jump advances in sub-frame steps and
+produces a jump arc **~3 px lower and ~4 px shorter** than the sim / lockstep /
+headless arc (all of which step at `fe = 1`). That deficit is negligible
+everywhere except where `multipleSpeed: 7` first spawns triple-wide large cacti
+(speed 7–8) at minimum jump range — precisely the death band. One mechanism
+explains the whole picture: the 7.1–7.7 band, `cactus_large` exclusivity,
+headless ≠ visible, lockstep passing, and sensitivity to system load
+(irregular frame times worsen the integration error).
+
+Proven causally by A/B: a fixed-timestep accumulator (`dino.html?fixedstep=1`)
+run visible, real-time, speed-capped 7.5 → **8/8** vs **0/8** for the default
+loop, same model. The `?fixedstep=1` param is diagnostic scaffolding only.
+
+### Decision: match the sim to the game, not the game to the sim
+
+The authentic variable-`dt` game on the target display *is* the deployment
+target, so the fix lives in the sim. `DinoEnv` gained three measured-timing
+parameters (all default to the historical `fe=1` / atomic-action behavior):
+
+- **`fe`** — physics quantum in frames. `0.4138 = 60/145` reproduces the real
+  jump arc. `step()` runs `round(n_frames / fe)` sub-steps of `fe` frames each.
+- **`cadence_samples`** — per-decision frames resampled from the *measured*
+  visible loop (`measurements/cadence_visible_20260705.npy`, mean 3.56,
+  std 0.36), replacing uniform 2–6 jitter which over-randomized the eval clock.
+- **`act_latency_frames`** — observe→act delay (~0.25 frames measured); the
+  action lands after the first sub-step(s), not atomically. Randomized per
+  episode in training (`act_latency_min/max`) so robustness is *learned*.
+
+### The calibrated screen and the brittleness metric
+
+With all three, the sim predicts visible gate-pass within ~5 pts for
+timing-robust policies (bench 51 vs visible ~50; v2b 65 vs ~70). The
+diagnostic byproduct: sweeping `act_latency` 0→0.414 measures **brittleness**
+— robust policies barely move (v2b spread 1, champion 5), Goodhart policies
+that exploit atomic-action timing collapse (spread 78–87) and are rejected
+before costing a visible battery. Selection also moved from saturated-median
+to **gate-lex** (gate-pass primary, median tiebreak): the median froze
+`best_model` at the frame cap and discarded gate-solving checkpoints.
+
+### Result
+
+| Model | recipe | visible gate | full-run median | endurance |
+|---|---|---|---|---|
+| v2b (`validated_jitter_20260620` line) | jitter+randstart, fe=1 world | ~70% | 21,704 | 21/30 die @200k |
+| `validated_timing_20260705` (E5) | + true timing model | 95% | 22,070 | (screen) |
+| `validated_capacity_20260707` (E8) | + `[26,256,128]` capacity | 95% | 22,220 | **29/30 survive 200k** |
+
+The champion trains on the physics its deployment display actually renders.
+Windup-gate deaths are gone; conditional bird strategy (jump when spaced,
+duck/fast-fall when tight) emerged with zero strategy engineering. Recipe
+reproduced across seeds. The lesson that generalizes: **when a learned policy
+contradicts obvious optimal play, suspect the environment before the learner**
+— the "never-ducking dino" was a sim-fidelity bug report filed months early.
+
 ## Invalidation note
 
 Checkpoints from before this overhaul are incompatible (15-feature input,
 dueling architecture, new game physics). The genetic agent's `network_layers`
 were updated to 15 inputs; a legacy browser-based GA (`--agent genetic
 --browser`) is kept for demonstration, but the sim-based GA is the default.
+
+**Feature-count lineage:** 15 (overhaul) → 20 (v2: dissolved + cadence) → 26
+(explicit bird-class one-hots). The current champion is 26-feature `[26,256,128]`;
+older checkpoints need their matching `--layers` (e.g. `20,128,64` for v2b).

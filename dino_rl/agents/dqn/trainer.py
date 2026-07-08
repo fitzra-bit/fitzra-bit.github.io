@@ -56,6 +56,18 @@ class DQNTrainer:
         if self._seed is not None:
             torch.manual_seed(self._seed)
 
+        # E5: empirical deployment clock (measured frames/decision samples).
+        # Loaded once; resampled per decision by every env this trainer builds.
+        self._cadence_samples = None
+        if cfg.get("cadence_file"):
+            self._cadence_samples = np.load(cfg["cadence_file"])
+            print(f"Timing model ON: fe={cfg.get('fe', 1.0)}, empirical cadence "
+                  f"({len(self._cadence_samples)} samples, mean "
+                  f"{self._cadence_samples.mean():.2f} f/dec), act latency "
+                  f"train U({cfg.get('act_latency_train_min', 0)},"
+                  f"{cfg.get('act_latency_train_max', 0)}) / eval "
+                  f"{cfg.get('act_latency_eval', 0)} frames")
+
         self.online, self.target = build_networks(cfg["network_layers"])
         self.optimizer = optim.Adam(self.online.parameters(), lr=cfg["lr"])
         self.buffer = ReplayBuffer(cfg["buffer_size"], N_FEATURES)
@@ -65,6 +77,7 @@ class DQNTrainer:
         self.best_eval = 0.0           # best DEPLOYMENT eval (controls best_model)
         self.last_eval = 0.0           # latest per-phase eval (gating)
         self.last_deploy = 0.0         # latest deployment eval
+        self.last_deploy_gate = 0.0    # latest deploy gate-pass fraction (E0c)
         self._last_loss = 0.0
         self._rng = np.random.default_rng(self._seed)
 
@@ -132,6 +145,23 @@ class DQNTrainer:
             return self.curriculum.env_params()
         return {"birds": True, "max_speed": 13.0}
 
+    def _timing_kwargs(self, for_eval: bool) -> dict:
+        """E5 deployment-timing model, applied to EVERY env (train, phase eval,
+        deploy eval): true physics quantum, empirical decision clock, act
+        latency (randomized per episode in training; measured mean in eval)."""
+        kw = {}
+        if self.cfg.get("fe", 1.0) != 1.0:
+            kw["fe"] = self.cfg["fe"]
+        if self._cadence_samples is not None:
+            kw["cadence_samples"] = self._cadence_samples
+        if for_eval:
+            if self.cfg.get("act_latency_eval"):
+                kw["act_latency_frames"] = self.cfg["act_latency_eval"]
+        elif self.cfg.get("act_latency_train_max") is not None:
+            kw["act_latency_min"] = self.cfg.get("act_latency_train_min", 0.0)
+            kw["act_latency_max"] = self.cfg["act_latency_train_max"]
+        return kw
+
     def _make_env(self, seed: Optional[int] = None, for_eval: bool = False) -> DinoEnv:
         kwargs = dict(
             max_frames=self.cfg["max_episode_frames"],
@@ -140,7 +170,9 @@ class DQNTrainer:
             death_reward=self.cfg["death_reward"],
             use_dissolved=self.cfg.get("use_dissolved", True),
             use_cadence=self.cfg.get("use_cadence", True),
+            gap_scale=self.cfg.get("train_gap_scale", 1.0),   # fast-pacing (train+phase eval)
             seed=seed,
+            **self._timing_kwargs(for_eval),
             **self._env_params(),
         )
         if for_eval:
@@ -178,6 +210,7 @@ class DQNTrainer:
             use_cadence=self.cfg.get("use_cadence", True),
             action_repeat=self.cfg.get("eval_action_repeat") or self.cfg["action_repeat"],
             seed=seed,
+            **self._timing_kwargs(for_eval=True),
             **p,
         )
         if self.cfg.get("jitter") and self.cfg.get("eval_jitter"):
@@ -205,8 +238,13 @@ class DQNTrainer:
         return {
             "median": float(np.median(s)),
             "mean": float(s.mean()),
+            "p10": float(np.percentile(s, 10)),
             "p25": float(np.percentile(s, 25)),
             "max": float(s.max()),
+            # E0c: uncensored gate metric. The median saturates at the frame
+            # cap (identical across runs), so it cannot see gate failures —
+            # gate_pass can. Reporting only; gating/selection still use median.
+            "gate_pass": float((s >= 2500.0).mean()),
             "survived": survived,
             "n": len(scores),
             "clears": float(np.mean(clears)),
@@ -330,7 +368,22 @@ class DQNTrainer:
                     # not the per-phase eval — so easy cacti phases can't lock it
                     # to a pre-bird checkpoint and discard the bird learning.
                     deploy_result = self.deployment_evaluate()
-                    self.last_deploy = deploy_result[metric]
+                    if self.cfg.get("deploy_metric") == "gate_lex":
+                        # Lexicographic: gate_pass rules, median tiebreaks.
+                        # One gate step (1/16) = 62,500 > any median (cap ~11k),
+                        # so median can never outvote a gate difference. This
+                        # replaces the saturated-median selector that froze
+                        # best_model on gate-failing checkpoints (E2).
+                        self.last_deploy = (deploy_result["gate_pass"] * 1_000_000
+                                            + deploy_result["median"])
+                    else:
+                        self.last_deploy = deploy_result[metric]
+                    self.last_deploy_gate = deploy_result["gate_pass"]
+                    print(f"  deploy eval: median {deploy_result['median']:.0f}  "
+                          f"GATE {100 * deploy_result['gate_pass']:.0f}%  "
+                          f"p10 {deploy_result['p10']:.0f}  "
+                          f"survived {deploy_result['survived']}/{deploy_result['n']}  "
+                          f"deaths {deploy_result['death_causes']}")
                     if self.last_deploy > self.best_eval:
                         self.best_eval = self.last_deploy
                         if self.logger:
@@ -368,7 +421,15 @@ class DQNTrainer:
                     "score": round(ep_score, 1),
                     "best": round(self.best_score, 1),
                     "eval_avg": round(self.last_eval, 1),
-                    "eval_best": round(self.best_eval, 1),
+                    # gate_lex packs (k/16)*1e6 + median into best_eval — i.e.
+                    # k*62,500 + median, median < 62,500. Unpack for display so
+                    # charts keep score scale; gate gets its own field.
+                    "eval_best": round(self.best_eval % 62_500
+                                       if self.cfg.get("deploy_metric") == "gate_lex"
+                                       else self.best_eval, 1),
+                    "best_gate": round((self.best_eval // 62_500) / 16.0, 3)
+                                 if self.cfg.get("deploy_metric") == "gate_lex" else None,
+                    "deploy_gate": round(self.last_deploy_gate, 3),
                     "epsilon": round(self.epsilon, 4),
                     "steps": ep_steps,
                     "buffer": len(self.buffer),
