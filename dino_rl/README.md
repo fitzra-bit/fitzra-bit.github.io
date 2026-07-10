@@ -197,13 +197,19 @@ dino_rl/
     └── web_dashboard.py        # http://localhost:8765 — charts + phase status
 ```
 
-## State features (26)
+## State features (28)
 
 > Lineage: **15** (overhaul) → **20** (v2: dissolved-time + cadence features)
-> → **26** (explicit bird-class one-hots: low/mid/high). The 15-feature core
-> below is unchanged; v2 adds indices 15–19 (ttc2, traverse1/2, time-gap,
-> cadence) and 20–25 (obs1/obs2 bird-class one-hots). Load older checkpoints
-> with their matching `--layers` (e.g. `20,128,64` for v2b).
+> → **26** (explicit bird-class one-hots: low/mid/high) → **28** (E11:
+> closing-velocity residuals). The 15-feature core below is unchanged; v2 adds
+> indices 15–19 (ttc2, traverse1/2, time-gap, cadence), 20–25 are the
+> obs1/obs2 bird-class one-hots, and 26–27 are per-obstacle closing-velocity
+> residuals `(measured Δx/frame − speed)/2` — the only observable trace of the
+> birds' hidden ±0.8 speed offset (E10 POMDP audit). Measured the same way in
+> sim and browser (consecutive-read deltas, first sighting = 0) so the feature
+> distribution matches at deploy time. Load older checkpoints with their
+> matching `--layers` (e.g. `26,256,128` for the 2026-07-07 champion,
+> `20,128,64` for v2b).
 
 Identical layout in sim (`dino_env._observe`) and browser
 (`game_state.to_array`) — that parity is what lets a sim-trained network

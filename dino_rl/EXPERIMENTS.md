@@ -279,3 +279,40 @@ otherwise. **Pre-registered rule: ADOPT if pooled bird-audit fast:slow death
 ratio ≤2× (baseline 5×) AND distributions don't regress vs the big-net
 baseline (gate median ≥88, endurance cap-out median ≥23%). Distribution
 claims only; no single-draw conclusions.**
+
+**Results (screened 2026-07-10, calibrated timing throughout):**
+
+| Seed | Run | Gate n=200 | Britt. lat0/lat.414 | Bird fast:slow (deaths) | Endurance cap-outs | End. median |
+|---|---|---|---|---|---|---|
+| 0 | `dqn_20260709_225323` | 87% | 91% / 82% | 0.3× (2/6) | 3/30 (10%) | 11,053 |
+| 1 | `dqn_20260710_015056` | 91% | 89% / 91% | 5.0× (5/1) | 15/30 (50%) | 60,700 |
+| 2 | `dqn_20260709_225412` | 92% | 95% / 92% | 0.0× (0/9) | 7/30 (23%) | 21,181 |
+
+**Verdict vs rule — ADOPT (all three prongs pass):**
+- **Pooled bird ratio: 0.43×** — 7 fast vs 16 slow deaths over ~1,479
+  encounters (fast 0.94%, slow 2.17% per encounter). Bar was ≤2×; baseline 5×.
+  Per-seed ratios (0.3/5.0/0.0×) swing wildly on tiny death counts — the
+  pooled rule exists precisely for this.
+- **Gate median 91** ({87, 91, 92}) ≥ 88. No regression.
+- **Endurance cap-out median 23%** ({10, 50, 23}%) ≥ 23%. No regression
+  (baseline {7, 10, 37, 97}%).
+
+**Reading beyond the rule (flagged, not concluded):** the fast-bird skew
+didn't just close — it *inverted*. Pooled slow-bird death rate (2.17%) now
+exceeds fast (0.94%), driven by slow LOW birds (seed 2: 8/9 bird deaths were
+slow-low, 9.8% cell rate; seed 0: 5 slow-low). Plausible mechanism: the
+residual is 0 on first sighting (needs two reads), so the *first* decision
+against a bird is still made blind, and a slow bird shifts the jump window
+later than the blind prior expects. Total bird mortality still improved
+(~1.6% per encounter pooled vs baseline ~2.8%). Candidate refinement if it
+matters later: none registered yet — poll-rate arm outranks it.
+
+**Champion: UNCHANGED.** E8 artifact (`validated_capacity_20260707`, measured
+97% cap-out endurance, 0/500 bird-audit deaths) still beats every E11 artifact
+on its own measured numbers. E11 adoption is a RECIPE change: the 28-feature
+observation closes the E10 POMDP hole at the distribution level, so future
+harvests start from a floor without the hidden-velocity blind spot. Visible
+confirmation of an E11 artifact deferred (game server stopped per Ryan
+2026-07-09; browser-side closing_v mechanics also need a headless check before
+visible numbers are trusted — driver code shipped but has only run in sim
+parity tests).
