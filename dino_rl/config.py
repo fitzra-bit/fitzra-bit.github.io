@@ -29,7 +29,9 @@ DQN_CONFIG = {
     # Network: dueling trunk (V/A heads appended internally)
     # Input is 26 (15 base + 5 v2 + 6 explicit obstacle-class one-hots;
     # see game/dino_env.py). Earlier checkpoints are incompatible.
-    "network_layers": [26, 128, 64],
+    "network_layers": [28, 256, 128],   # E11: 26 + 2 closing-velocity residuals;
+                                        # older nets: --net-layers / --layers 26,...
+                                        # (obs is truncated to the net's input dim)
 
     # Optimisation
     "lr": 1e-4,

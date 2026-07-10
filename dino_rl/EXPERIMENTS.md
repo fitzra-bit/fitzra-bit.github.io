@@ -262,3 +262,20 @@ is computable in the existing loop, mirroring the cadence-feature pattern
 AND all other temporal structure, still architecture-preserving; (c) DRQN —
 only if (a)/(b) underdeliver. Judged under amended rules: 3 seeds, gate AND
 endurance distributions vs the now-measured baselines.
+
+### E11 — closing-velocity feature arm (launched 2026-07-07)
+
+Features 26–27: per-obstacle closing-velocity residual `(measured Δx/frame −
+speed)/2`, clipped ±1, plausibility-gated (|v−speed|>1.5 → 0, kills id-reuse /
+mismatch artifacts). Sim: id-tracked previous positions in `_observe`; browser:
+driver matches consecutive reads by type + expected travel (mirrors the
+cadence-feature pattern; resets on restart/navigation). Sanity-verified: fast
+birds read +0.410, slow −0.411, cacti zero-mean. `N_FEATURES=28`; config
+default net `[28,256,128]`; older checkpoints unaffected (obs truncated to
+their input dim everywhere).
+
+**Arm:** 3 seeds (0/1/2), `--net-layers 28,256,128`, 2,500 eps, E5/E8 recipe
+otherwise. **Pre-registered rule: ADOPT if pooled bird-audit fast:slow death
+ratio ≤2× (baseline 5×) AND distributions don't regress vs the big-net
+baseline (gate median ≥88, endurance cap-out median ≥23%). Distribution
+claims only; no single-draw conclusions.**

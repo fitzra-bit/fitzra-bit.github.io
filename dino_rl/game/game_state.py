@@ -24,6 +24,9 @@ class Obstacle:
     width: float
     height: float
     type: str  # "CACTUS_SMALL", "CACTUS_LARGE", "PTERODACTYL"
+    closing_v: Optional[float] = None   # measured px/frame toward the dino
+                                        # (set by the driver from consecutive
+                                        # reads; None = no previous observation)
 
     @property
     def is_bird(self) -> bool:
@@ -105,6 +108,17 @@ class GameState:
                 return [0.0, 0.0, 0.0]
             return [float(ob.y == 100.0), float(ob.y == 75.0), float(ob.y == 50.0)]
 
+        # E11: closing-velocity residual — MUST mirror dino_env.closing_res().
+        # closing_v is measured by the driver from consecutive reads (Δx over
+        # the cadence interval); the residual vs game speed exposes the birds'
+        # hidden ±0.8 speed_offset that a single snapshot cannot reveal.
+        def closing_res(ob: Optional[Obstacle]) -> float:
+            if ob is None or ob.closing_v is None:
+                return 0.0
+            if abs(ob.closing_v - self.speed) > 1.5:   # mismatch artifact guard
+                return 0.0
+            return max(-1.0, min(1.0, (ob.closing_v - self.speed) / 2.0))
+
         return np.array(
             f1 + f2 + [
                 gap,
@@ -116,6 +130,7 @@ class GameState:
                 ttc1,
                 # ── appended v2 features (indices 15–19) ──
                 ttc2, trav1, trav2, tgap, cadence,
-            ] + bird_class(o1) + bird_class(o2),   # indices 20–25
+            ] + bird_class(o1) + bird_class(o2)     # indices 20–25
+              + [closing_res(o1), closing_res(o2)],  # indices 26–27 (E11)
             dtype=np.float32,
         )

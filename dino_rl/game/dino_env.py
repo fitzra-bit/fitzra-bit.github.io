@@ -52,7 +52,10 @@ OB_TYPES = {
                      "speed_offset": 0.8},
 }
 
-N_FEATURES = 26           # 15 base + 5 v2 + 6 explicit obstacle-class one-hots
+N_FEATURES = 28           # 15 base + 5 v2 + 6 obstacle-class one-hots
+                          # + 2 closing-velocity residuals (E11: birds' hidden
+                          # ±0.8 speed_offset is unobservable in one snapshot —
+                          # audited 5× death skew toward fast birds)
 TTC_FRAMES_NORM = 120.0   # frames-to-impact normaliser for the TTC feature
 TRAVERSE_NORM = 20.0      # frames-to-traverse normaliser (obstacle width / speed)
 
@@ -192,6 +195,7 @@ class DinoEnv:
         self.history: list[str] = []
         self.cleared = 0
         self.death_cause: Optional[str] = None
+        self._prev_ob_x = {}    # id -> (type, x) at last decision (closing-v feature)
         return self._observe()
 
     @property
@@ -469,7 +473,23 @@ class DinoEnv:
                 return [0.0, 0.0, 0.0]
             return [float(ob.y == 100.0), float(ob.y == 75.0), float(ob.y == 50.0)]
 
-        return np.array(
+        # E11: closing-velocity residual — measured Δx/frame vs game speed.
+        # Birds move at speed ± 0.8 (speed_offset), which one snapshot cannot
+        # reveal and the TTC feature mis-states by ~12%; audited 5× death skew
+        # toward fast birds. Residual ≈ ±0.4 for birds, ≈ 0 for cacti; 0 when
+        # the obstacle has no previous observation (just spawned / after reset).
+        def closing_res(ob: Optional[_Obstacle]) -> float:
+            if ob is None or self.last_n_frames <= 0:
+                return 0.0
+            prev = self._prev_ob_x.get(id(ob))
+            if prev is None or prev[0] != ob.type:
+                return 0.0
+            v = (prev[1] - ob.x) / self.last_n_frames
+            if abs(v - self.speed) > 1.5:   # beyond ±0.8 physics → mismatch artifact
+                return 0.0
+            return max(-1.0, min(1.0, (v - self.speed) / 2.0))
+
+        obs = np.array(
             f1 + f2 + [
                 gap,
                 (self.speed - INITIAL_SPEED) / 7.0,
@@ -480,6 +500,10 @@ class DinoEnv:
                 ttc1,
                 # ── appended v2 features (indices 15–19) ──
                 ttc2, trav1, trav2, tgap, cadence,
-            ] + bird_class(o1) + bird_class(o2),   # indices 20–25
+            ] + bird_class(o1) + bird_class(o2)     # indices 20–25
+              + [closing_res(o1), closing_res(o2)],  # indices 26–27 (E11)
             dtype=np.float32,
         )
+        # refresh per-obstacle position memory for the next decision
+        self._prev_ob_x = {id(ob): (ob.type, ob.x) for ob in self.obstacles}
+        return obs

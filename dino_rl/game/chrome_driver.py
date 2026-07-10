@@ -147,6 +147,7 @@ class DinoDriver:
         self._driver_pid: Optional[int] = getattr(self.driver.service.process, "pid", None)
         self.ground_y: float = 93.0
         self._prev_rt: Optional[float] = None   # last runningTime, for cadence feature
+        self._prev_obs: Optional[list] = None   # last read's (type, x) list (closing-v feature)
         self._open_game()
         if self.lockstep:
             self._enable_lockstep()
@@ -184,6 +185,7 @@ class DinoDriver:
         # run CONCURRENTLY with real-time stepping (hybrid, non-deterministic).
         if self.lockstep:
             self._enable_lockstep()
+        self._prev_obs = None  # new page — reset closing-velocity tracking
         self._start_game()
         time.sleep(0.5)
         raw = self._raw_state()
@@ -235,6 +237,26 @@ class DinoDriver:
             )
             for o in raw.get("obstacles", [])
         ]
+
+        # E11: per-obstacle closing velocity from consecutive reads. Match each
+        # obstacle to the previous read by type + plausible leftward travel
+        # (expected Δx ≈ speed·cadence; birds deviate by ±0.8·cadence). Spacing
+        # (minGap ≥120px) vs per-read travel (≤~60px) makes matches unambiguous.
+        speed = raw.get("speed", 0.0)
+        if self._prev_obs is not None and cadence and cadence > 0:
+            expected = speed * cadence
+            tol = 1.5 * cadence   # birds deviate ≤0.8 px/frame; beyond 1.5 = mismatch
+            for ob in obstacles:
+                best, best_err = None, tol
+                for (ptype, px) in self._prev_obs:
+                    if ptype != ob.type or px < ob.x:
+                        continue
+                    err = abs((px - ob.x) - expected)
+                    if err < best_err:
+                        best, best_err = px, err
+                if best is not None:
+                    ob.closing_v = (best - ob.x) / cadence
+        self._prev_obs = [(ob.type, ob.x) for ob in obstacles]
 
         return GameState(
             crashed=raw["crashed"],
@@ -319,6 +341,7 @@ class DinoDriver:
         except Exception:
             self._start_game()
         self._prev_rt = None   # restart zeroes runningTime; reset cadence tracking
+        self._prev_obs = None  # reset closing-velocity tracking
         time.sleep(0.3)
 
     def close(self):
