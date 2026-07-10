@@ -318,6 +318,13 @@ to **gate-lex** (gate-pass primary, median tiebreak): the median froze
 | `validated_timing_20260705` (E5) | + true timing model | 95% | 22,070 | (screen) |
 | `validated_capacity_20260707` (E8) | + `[26,256,128]` capacity | 95% | 22,220 | **29/30 survive 200k** |
 
+> Caveat (2026-07-07 certification review): the champion rows are
+> **artifact-level** results — verified on the deployment instruments and
+> standing. They are NOT recipe guarantees: fresh seeds of the same recipes
+> land gates 83–96% and endurance 7–37% cap-outs. E8 is a top-tail draw; the
+> capacity effect at recipe level is unresolved, and harvest variance
+> (post-curriculum oscillation) is the open constraint. See EXPERIMENTS.md.
+
 The champion trains on the physics its deployment display actually renders.
 Windup-gate deaths are gone; conditional bird strategy (jump when spaced,
 duck/fast-fall when tight) emerged with zero strategy engineering. Recipe

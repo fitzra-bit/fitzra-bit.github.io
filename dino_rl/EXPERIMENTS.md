@@ -22,6 +22,17 @@ Protocol defined 2026-07-04 (see PROGRESS_REVIEW.md for rationale).*
 saturates — use MSBD + failure-budget; pre-register bars and stop batteries
 early once the outcome is locked (sequential stopping)**.
 
+**Amendments (2026-07-07, Phase 5 review):** (1) reproducibility bars come from
+the recipe's MEASURED expected distribution (median across seeds), never from
+the champion's numbers; (2) no arm decision on fewer than 3 seeds — no
+exceptions, including decisive-looking arms (E7/E8 violated this; the
+certification failure was the bill); (3) certification rules use median/k-of-n
+forms, not all-must-pass ANDs (with per-seed pass prob p, all-3-pass = p³ — a
+coin flip even at p=0.8); (4) recipe-level CAUSAL claims ("X was the
+constraint") require the multi-seed distribution, not the adopted artifact;
+(5) the certifiable unit at current harvest variance is the PIPELINE
+(train k seeds → screen → select), not the single run.
+
 **Known selection flaw (target of E2):** `best_model` updates only on a
 strictly-greater deploy median; once the median saturates at the frame cap
 (25,387.41), best_model freezes at the FIRST checkpoint to hit it.
@@ -135,7 +146,7 @@ start / gate / cruise / birds / endurance. Bird-drill env if needed.
 | ID | Variable | Decision rule | Result |
 |---|---|---|---|
 | E7 | Training budget ×2 (5,000 eps, seed 1, same recipe — the E5 budget was inherited from the broken-world era) | adopt if sim endurance median (n=30, calibrated, 200k-frame cap) beats champion's 44,903 AND no regression on gate battery (calibrated ≥90%) / brittleness (<15) / visible P(20k) (≥9/10) | **REJECTED (2026-07-06).** Run `dqn_20260706_074338` (NB: not a replay of seed 1 — FP nondeterminism under different thread load; treat as independent draw). Banked best 16/16 on trainer eval but: calibrated gate **71%** (vs champion 94), endurance median **6,309** (vs 44,903, 7× worse), deaths bird_mid 18/30. Brittleness 12 (ok). Strike one vs undertraining theory — doubled budget produced a worse draw, not a better peak. Bonus findings: (a) n=16 deploy eval saturates at 16/16 — two "perfect" checkpoints differ 94-vs-71 at n=200 (median tiebreak did rank them correctly across runs); (b) post-curriculum peak quality is draw-dependent; budget doesn't buy peaks. |
-| E8 | Network capacity ×~4 params (`[26,256,128]` vs control `[26,128,64]`), control budget 2,500 eps, seed 1 | same rule as E7; second consecutive fail → per stopping rule, Phase 4 closes and Phase 5 certifies the champion | **SCREEN: ADOPT-CLASS (2026-07-06/07).** Run `dqn_20260706_190238`. Unprecedented curriculum: exited phase 4 AT the eval cap (11,088; all prior runs ~1.7–2.4k). Calibrated gate **96%** (CI 92–98) vs champion 94; brittleness spread 6; **endurance: 29/30 episodes SATURATED the 200k-frame farm (median=p10=p90=max=64,388; 1 death in 30 × ~55 game-min)** vs champion median 44,903 with 21/30 deaths. The model outgrew the endurance instrument. Capacity was the binding constraint (Ryan's model-level instinct, queued since the June conversations, confirmed). **VISIBLE CONFIRMED + ADOPTED (2026-07-07): gate 19/20 = 95%; full-distance median 22,220, 9/10 at ceiling** (vs champion 22,070, 9/10). All adopt criteria met → **NEW CHAMPION: `models/validated_capacity_20260707` ([26,256,128])**. Known residual: rare early-game instant deaths (2/31 visible episodes: 64 @6.4, 191 @7.2 — start-band watch item). **Phase 4 CLOSES via stopping rule (a): endurance lift confirmed** (sim farm saturated). → Phase 5: certify the E8 recipe (3 fresh seeds), failure-budget instruments (run-until-k-deaths + sequential stopping) replace saturated pass-rate batteries, OVERHAUL.md timing chapter, README, merge. |
+| E8 | Network capacity ×~4 params (`[26,256,128]` vs control `[26,128,64]`), control budget 2,500 eps, seed 1 | same rule as E7; second consecutive fail → per stopping rule, Phase 4 closes and Phase 5 certifies the champion | **SCREEN: ADOPT-CLASS (2026-07-06/07).** Run `dqn_20260706_190238`. Unprecedented curriculum: exited phase 4 AT the eval cap (11,088; all prior runs ~1.7–2.4k). Calibrated gate **96%** (CI 92–98) vs champion 94; brittleness spread 6; **endurance: 29/30 episodes SATURATED the 200k-frame farm (median=p10=p90=max=64,388; 1 death in 30 × ~55 game-min)** vs champion median 44,903 with 21/30 deaths. The model outgrew the endurance instrument. ~~Capacity was the binding constraint (confirmed)~~ **[CORRECTED 2026-07-07, post-cert review: that was an n=1 causal inference and the certification data does not support it — fresh big-net seeds' gates (84–91%) and endurance (7–37% cap-outs) overlap the small-net distribution; E8 is a top-tail draw within its own recipe. Artifact-level results stand; recipe-level capacity effect UNRESOLVED. This arm also violated the 3-seed standing rule, as did E7.]** **VISIBLE CONFIRMED + ADOPTED (2026-07-07): gate 19/20 = 95%; full-distance median 22,220, 9/10 at ceiling** (vs champion 22,070, 9/10). All adopt criteria met → **NEW CHAMPION: `models/validated_capacity_20260707` ([26,256,128])**. Known residual: rare early-game instant deaths (2/31 visible episodes: 64 @6.4, 191 @7.2 — start-band watch item). **Phase 4 CLOSES via stopping rule (a): endurance lift confirmed** (sim farm saturated). → Phase 5: certify the E8 recipe (3 fresh seeds), failure-budget instruments (run-until-k-deaths + sequential stopping) replace saturated pass-rate batteries, OVERHAUL.md timing chapter, README, merge. |
 
 - **Visible ground-truth endurance** (4 eps, 250k-step ceiling, overnight →
   2026-07-06): **515 · 1,646 · 34,842 · 157,682** (median 18,244, mean 48,671).
@@ -199,3 +210,32 @@ level (median across seeds), not the champion's.
 Deliverables: failure-budget instrument (`--until-deaths`, MSBD) — DONE;
 OVERHAUL.md timing chapter — DONE; README — DONE; branch pushed through
 `8068d15`. Remaining: certification-verdict commit; optional merge to main.
+
+### Phase 5 review addendum (2026-07-07) — process audit + capacity backfill
+
+Post-merge review of Phase 5's logic found four process flaws, now codified as
+standing-rule amendments (see top): (1) the cert rule's all-must-pass AND form
+had ~coin-flip false-failure odds even for a good recipe; (2) its thresholds
+were anchored on E8's own draw — the project's 4th winner's-curse instance;
+(3) the "split verdict" softened the pre-registered ≥90% gate bar post-hoc
+(2/3 seeds missed it at 84–85%); (4) certification used the saturated 200k
+farm instead of the MSBD instrument built expressly because it saturated.
+
+**Capacity backfill (endurance farm on E5 small-net seeds 0/2, same settings):**
+
+| recipe | calibrated gates | endurance cap-outs @200k farm |
+|---|---|---|
+| small `[26,128,64]` (3 draws) | 83, 90, 94 (median 90) | 27%, 30%, **60%** (median 30%) |
+| big `[26,256,128]` (4 draws) | 84, 85, 91, 96 (median 88) | 7%, 10%, 37%, **97%** (median 23%) |
+
+**The capacity claim is not just unproven — the data leans against it:** the
+small net's median endurance is higher, and the program's 2nd-best endurance
+draw (E5-seed2, 60% cap-outs, capped median 64,388) is a small net that had
+screened at only 83% gate. Findings: (a) E8 is an extreme draw, from either
+recipe's perspective; (b) within-recipe variance (7→97%, 27→60%) dwarfs any
+between-recipe difference; (c) gate skill and endurance skill are partially
+DECOUPLED — screening on gate alone under-values endurance-strong draws.
+**The binding constraint after the timing fix is harvest variance**, and the
+certifiable unit is the pipeline (train k seeds → screen on gate AND
+endurance/MSBD → select). Claim-site corrections applied to the champion
+README, E8 ledger row, and OVERHAUL.md results table.

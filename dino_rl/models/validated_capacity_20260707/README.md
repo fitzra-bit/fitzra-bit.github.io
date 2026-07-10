@@ -5,10 +5,17 @@ the control's parameters), trained on the E5 recipe (true timing model:
 fe 0.4138, empirical cadence clock, per-episode act-latency randomization,
 gate-lex selection), control budget 2,500 episodes, seed 1.
 
-Capacity was the last binding constraint (Ryan's model-level instinct,
-raised in the June conversations, confirmed by this arm): the corrected
-world's continuous cadence input and context-conditional strategies
-outgrew `[26,128,64]`.
+**Correction (2026-07-07, post-certification review):** this README originally
+claimed "capacity was the last binding constraint." That was an n=1 inference,
+and the Phase 5 certification data does not support it at recipe level: 3
+fresh big-net seeds landed gates 84–91% with endurance cap-outs 7–37% —
+distributions overlapping the small-net `[26,128,64]` seeds. **E8's numbers
+are artifact-level facts (earned on the visible deployment instruments and
+they stand), but E8 is a top-tail draw within its recipe, not proof that
+capacity shifted the distribution.** Whether capacity raises the ceiling of
+good draws is an open, testable hypothesis. The demonstrated binding
+constraint after the timing fix is HARVEST VARIANCE (post-curriculum
+oscillation makes banked-peak quality a lottery). See EXPERIMENTS.md Phase 5.
 
 **Results (visible browser = deployment truth, 2026-07-07):**
 - Gate battery (n=20): **19/20 = 95%**
