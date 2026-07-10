@@ -239,3 +239,26 @@ DECOUPLED — screening on gate alone under-values endurance-strong draws.
 certifiable unit is the pipeline (train k seeds → screen on gate AND
 endurance/MSBD → select). Claim-site corrections applied to the champion
 README, E8 ledger row, and OVERHAUL.md results table.
+
+### E10 — bird closing-velocity observability audit (2026-07-07)
+
+Hypothesis (from external review + feature inspection): birds carry a hidden
+±0.8 `speed_offset`; the TTC feature computes `x/speed` — wrong by ~12% for
+birds, unknowable from one snapshot → bird deaths should skew toward FAST
+(+offset) birds. Probe: `bird_velocity_audit.py` (calibrated timing,
+start-speed 11–13 to farm top-speed encounters; 100 eps × 3 models).
+
+**CONFIRMED, ~5× skew.** Pooled cert seeds 2+3: encounters +365/−332,
+deaths **+17/−3** (4.7% vs 0.9% per encounter; p≈0.001). cert-seed2: 5/5
+deaths on fast birds. **E8 champion: 0 bird deaths in 500 encounters** — a
+good draw covers the hole by margin, but the recipe distribution bleeds
+through it. First mechanistic account of a residual-death class since the
+windup gate.
+
+Fix candidates (one variable each, in cost order): (a) **closing-velocity
+feature** — driver/env already hold the previous read; per-obstacle Δx/frame
+is computable in the existing loop, mirroring the cadence-feature pattern
+(26→28 inputs, surgical); (b) **4-frame stacking** (26→104) — reveals velocity
+AND all other temporal structure, still architecture-preserving; (c) DRQN —
+only if (a)/(b) underdeliver. Judged under amended rules: 3 seeds, gate AND
+endurance distributions vs the now-measured baselines.
