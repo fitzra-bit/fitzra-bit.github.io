@@ -151,6 +151,9 @@ def run_dqn(args):
         print(f"Random start speed ON: training episodes start at "
               f"{cfg['start_speed_min']}-{cfg['start_speed_max']} "
               f"(enriches the data-light bird band; eval starts at 6)")
+    if getattr(args, "cadence_file", None):
+        cfg["cadence_file"] = args.cadence_file
+        print(f"Cadence file: {cfg['cadence_file']} (E12 poll-rate arms)")
 
     from logger import RunLogger, find_latest_run
     from agents.dqn.trainer import DQNTrainer
@@ -442,6 +445,13 @@ def main():
         default=None,
         dest="net_layers",
         help="DQN training: override network_layers, e.g. 26,256,128 (capacity arms)",
+    )
+    parser.add_argument(
+        "--cadence-file",
+        default=None,
+        dest="cadence_file",
+        help="DQN training: override the empirical cadence .npy (E12 poll-rate "
+             "arms — train against a different measured decision clock)",
     )
     parser.add_argument(
         "--resume-dir",

@@ -27,7 +27,7 @@ def main(args):
     net = QNetwork(layers)             # 26-feature vector (one-hots are last)
     load_model(net, args.load)
     net.eval()
-    poll = GAME_CONFIG["poll_interval"]
+    poll = GAME_CONFIG["poll_interval"] if args.poll is None else args.poll
 
     d = DinoDriver(headless=args.headless, lockstep=False)
     scores, death_speeds = [], []
@@ -79,6 +79,9 @@ if __name__ == "__main__":
     ap.add_argument("--episodes", type=int, default=15)
     ap.add_argument("--max-steps", type=int, default=4000, dest="max_steps")
     ap.add_argument("--headless", action="store_true")
+    ap.add_argument("--poll", type=float, default=None,
+                    help="override GAME_CONFIG poll_interval (s) — E12 recipe "
+                         "deploys at 0.02")
     ap.add_argument("--layers", default=None,
                     help="comma-separated network layers for older checkpoints, e.g. 20,128,64")
     main(ap.parse_args())

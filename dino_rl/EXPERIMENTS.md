@@ -316,3 +316,108 @@ confirmation of an E11 artifact deferred (game server stopped per Ryan
 2026-07-09; browser-side closing_v mechanics also need a headless check before
 visible numbers are trusted — driver code shipped but has only run in sim
 parity tests).
+
+### E12 — poll-rate (decision quantization) arm (launched 2026-07-10)
+
+**Hypothesis:** the agent's 50ms poll (~3.56 frames ≈ 46px between decisions
+at speed 13) caps jump-timing precision, and this — not observability (closed
+by E11) — is the binding constraint on endurance. The poll interval is
+AGENT-side (`GAME_CONFIG["poll_interval"]`), not a game modification.
+
+**Probe (existing artifacts at fast cadence, sim, calibrated):** naive runs
+collapsed completely (E8 median ~100, E11-s1 ~400–1,000 vs native 60,700) —
+the cadence feature goes far OOD (0.30 vs trained 0.55–1.46). With a new
+`--cadence-feature` clamp (feature reports native 3.565 while the world runs
+÷2): **E8 fully rescued — 27/30 cap-outs (90%) ≈ its native 97%**; E11-s1 NOT
+rescued (465 — deeper timing specialization). Conclusions: (a) fast cadence is
+mechanically playable at champion level; (b) a 3.56-trained policy gains
+nothing from doubled resolution — the payoff, if any, requires a policy
+TRAINED at fast cadence. Probe cannot bound it.
+
+**Poll sweep (visible browser, 1,200 decisions/leg, dumped to
+`measurements/cadence_poll{50,20,10,00}_20260710.npy`):**
+
+| requested | realized mean f/dec | p95 | max | px/dec @13 | act_ms |
+|---|---|---|---|---|---|
+| 50ms (control) | 3.72 | 4.2 | 10.0 | 48 | 5.3 |
+| 20ms | 1.87 | 2.1 | 4.2 | 24 | 4.9 |
+| 10ms | 1.28 | 1.7 | 2.9 | 17 | 5.3 |
+| 0ms (spin) | 0.66 | 0.8 | 1.3 | 8.6 | 5.2 |
+
+Control ≈ July-5 baseline (3.56 → 3.72, mild drift, instrument valid). Act
+latency ~5ms (≈0.3 fr) is poll-invariant — latency model unchanged. The 20ms
+clock has NO spike tail (max 4.2 vs 10.0) — faster polling is also cleaner.
+Caveat: fast legs sampled only the windup band (measuring policy collapses
+at fast cadence in the real loop — no browser-side feature clamp); control
+shows windup≈mid, and this closes properly once a fast-trained policy can
+re-measure all bands.
+
+**Pilot (1 seed, resource decision only — NOT an adopt decision):** E11
+recipe + `--cadence-file measurements/cadence_poll20_20260710.npy` (20ms
+clock: 2× decision density, ~2× training cost; the 0.66 floor is the second
+rung if this pays). **Pre-registered pilot rule: spend on the full 3-seed arm
+iff the pilot's calibrated screen ON ITS OWN CLOCK shows gate ≥85% AND
+endurance cap-out ≥23% (E11 median). Pre-registered ADOPT rule (full arm
+only): endurance cap-out median STRICTLY > 23% (the lift is the hypothesis)
+AND gate median ≥88 AND bird pooled ratio ≤2× (E11 gains retained). Champion
+promotion additionally requires visible confirmation at 20ms poll.**
+
+**Pilot results (seed 0 = `runs/dqn_20260710_212411`, screened 2026-07-11 on
+its own 20ms clock):** gate **200/200 = 100%** (CI 98–100) — first perfect
+gate this program has measured; brittleness 99%/100% (spread ~1); bird audit
+3 deaths/440 encounters (0.68%, all fast-HIGH, 0 slow); endurance **26/30
+cap-outs (87%)**, median = cap, p10 54,686 — vs E11 seeds {10, 50, 23}%. All
+4 endurance deaths at speed 13.0, ALL birds (2 high, 2 mid) — the
+tight-cactus death mode that dominated every 50ms policy is absent from the
+profile. **Spend rule: PASS (100 ≥ 85; 87 ≥ 23). Full arm launched
+2026-07-11 ~09:45: seeds 1, 2 in parallel, same recipe + clock (pilot counts
+as seed 0). Adopt/promotion rules as pre-registered above — pilot numbers are
+ONE DRAW; no causal claim until the arm distribution exists.**
+
+**Full arm results (seeds 1, 2 screened 2026-07-11, own 20ms clock):**
+
+| Seed | Run | Gate n=200 | Britt. | Bird deaths f/s (enc) | Endurance cap-outs | End. median |
+|---|---|---|---|---|---|---|
+| 0 (pilot) | `dqn_20260710_212411` | 100% | 99/100 | 3/0 (440) | 26/30 (87%) | 64,388 (cap) |
+| 1 | `dqn_20260711_094524` | 74% | 77/72 | 2/0 (384) | 17/30 (57%) | 64,388 (cap) |
+| 2 | `dqn_20260711_094626` | 96% | 96/92 | 0/0 (440) | 10/30 (33%) | 28,604 |
+
+**Verdict vs pre-registered adopt rule:**
+- **Endurance cap-out median 57%** ({87, 57, 33}) **STRICTLY > 23%** ✓ — the
+  lift is real at the distribution level: every E12 seed ≥ the E11 median;
+  the E12 WORST draw (33%) beats the E11 median.
+- **Gate median 96** ({100, 74, 96}) ≥ 88 ✓.
+- **Pooled bird ratio: INDETERMINATE BY DEGENERACY — 5 fast vs 0 slow deaths
+  (~1,264 encounters).** The ratio's letter (≤2×) cannot be evaluated with a
+  zero denominator, and 5 events can't pin a skew (P(5:0 | equal rates) ≈ 3%).
+  The prong's INTENT (retain E11's bird gains) passes unambiguously: total
+  bird mortality 0.40%/encounter vs E11's 1.6% (4× better), zero slow-side
+  deaths (E11's inversion gone). Registered as-is, not softened post-hoc: the
+  rule failed to anticipate zero-denominator outcomes.
+
+**ADOPT (2 prongs pass, 3rd indeterminate with intent unambiguously met).**
+Decision-rate quantization was a real, large constraint — but note causality
+nuance: the 20ms clock is also CLEANER (no spike tail), so "faster" and
+"cleaner" are partially confounded in this arm. Seed 1 is a weak-gate draw
+(74%, windup cactus_large deaths, E2-style start transient) — harvest
+variance persists. Remaining death frontier at 20ms: fast HIGH birds
+(pilot 3, seed 1 2 + 8 in endurance) and seed-1's windup transient.
+
+**Recipe going forward: E11 features + 20ms clock
+(`--cadence-file measurements/cadence_poll20_20260710.npy`, agent
+`poll_interval` 0.02 at deploy). Candidate artifact: seed 0/pilot (gate 100%,
+endurance 87%). NOT yet champion — promotion requires the visible protocol at
+20ms poll (20-ep gate + 10-ep clean_realtime) + browser closing_v mechanics
+check. Cross-clock artifact comparisons (vs E8 champion @50ms) are
+banned per standing rules — the clocks are different instruments.**
+
+**Browser-side closing_v mechanics check (E11 feature in the REAL game,
+headless, 20ms poll, candidate seed 0, 5 eps / 27,844 reads):** coverage
+**96%** of obs1-present reads non-zero (first-sighting zeros are the 4%);
+cactus residuals mean −0.000, std 0.000, |max| 0.004 (dead zero — plausibility
+gate + matching clean); bird residuals split **fast +0.400 (n=3,566) / slow
+−0.400 (n=3,877)**, exactly the ±0.8 speed offset after /2 norm. The
+driver's consecutive-read matching reproduces the sim estimator faithfully —
+the E11 feature is real at deploy, not a sim-only artifact. Only visible
+protocol (physical display) now remains before promotion. Tool:
+`closing_v_check.py`.

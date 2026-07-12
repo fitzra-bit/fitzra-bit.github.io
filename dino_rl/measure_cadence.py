@@ -52,7 +52,7 @@ def main(args):
     net = QNetwork(layers)
     load_model(net, args.load)
     net.eval()
-    poll = GAME_CONFIG["poll_interval"]
+    poll = GAME_CONFIG["poll_interval"] if args.poll is None else args.poll
 
     d = DinoDriver(headless=args.headless, lockstep=False)
     if args.maxspeed or args.no_birds:
@@ -126,6 +126,10 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--load", required=True)
     ap.add_argument("--decisions", type=int, default=1500)
+    ap.add_argument("--poll", type=float, default=None,
+                    help="override GAME_CONFIG poll_interval (s) — E12 poll-rate "
+                         "sweep; the realized cadence floor is what matters, "
+                         "not the requested rate")
     ap.add_argument("--headless", action="store_true")
     ap.add_argument("--maxspeed", type=float, default=None)
     ap.add_argument("--no-birds", action="store_true", dest="no_birds")

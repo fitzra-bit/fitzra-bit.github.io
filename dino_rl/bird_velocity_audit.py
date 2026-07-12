@@ -35,7 +35,7 @@ def main(args):
     load_model(net, args.load)
     net.eval()
 
-    cadence = np.load("measurements/cadence_visible_20260705.npy")
+    cadence = np.load(args.cadence_file)
 
     # encounters[height][sign] / deaths[height][sign], sign in {+1, -1}
     encounters = defaultdict(lambda: defaultdict(int))
@@ -114,4 +114,8 @@ if __name__ == "__main__":
     ap.add_argument("--layers", default="26,256,128")
     ap.add_argument("--episodes", type=int, default=100)
     ap.add_argument("--max-frames", type=int, default=20_000, dest="max_frames")
+    ap.add_argument("--cadence-file", dest="cadence_file",
+                    default="measurements/cadence_visible_20260705.npy",
+                    help="empirical cadence .npy — use the clock the policy "
+                         "was trained for (E12 poll-rate arms)")
     main(ap.parse_args())

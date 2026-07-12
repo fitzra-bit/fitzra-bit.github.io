@@ -108,6 +108,10 @@ class DinoEnv:
         act_latency_max=None,                  #   robustness: brittleness is trained away)
         use_dissolved: bool = True,      # ablation: zero the dissolved time features
         use_cadence: bool = True,        # ablation: zero the cadence feature
+        cadence_feature_override: Optional[float] = None,  # ablation (E12 probe):
+                                         # report THIS value (frames) in the cadence
+                                         # feature regardless of the realized cadence —
+                                         # isolates feature-OOD from timing dependence
         max_frames: int = 36_000,        # 10 game-minutes cap
         survival_reward: float = 0.001,  # per frame
         clear_reward: float = 1.0,
@@ -156,6 +160,7 @@ class DinoEnv:
         self._randstart = start_speed_min is not None and start_speed_max is not None
         self.use_dissolved = use_dissolved
         self.use_cadence = use_cadence
+        self.cadence_feature_override = cadence_feature_override
         # Independent RNG so the obstacle sequence for a given seed is identical
         # whether or not timing jitter is on (keeps jitter/no-jitter comparable).
         self.timing_rng = np.random.default_rng(None if seed is None else seed + 777)
@@ -462,7 +467,10 @@ class DinoEnv:
                 tgap = 1.0
         else:
             ttc2 = trav1 = trav2 = tgap = 0.0   # ablated: constant → no information
-        cadence = (self.last_n_frames / 6.0) if self.use_cadence else 0.0
+        _cad_frames = (self.cadence_feature_override
+                       if self.cadence_feature_override is not None
+                       else self.last_n_frames)
+        cadence = (_cad_frames / 6.0) if self.use_cadence else 0.0
 
         # Explicit obstacle-class one-hots — give the height/type as a crisp
         # categorical cue (bird_low/mid/high) so the policy learns per-class

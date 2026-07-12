@@ -61,7 +61,7 @@ def summarize(results, threshold):
 
 def run_browser(args, net, n_in):
     from game.chrome_driver import DinoDriver
-    poll = GAME_CONFIG["poll_interval"]
+    poll = GAME_CONFIG["poll_interval"] if args.poll is None else args.poll
     d = DinoDriver(headless=args.headless, lockstep=args.lockstep)
     if args.maxspeed or args.no_birds or args.fixedstep:
         # Speed-capped / cacti-only game via dino.html URL params — e.g. cap at
@@ -141,6 +141,8 @@ def _make_sim_env(args, cfg, seed, cadence):
         kwargs["cadence_samples"] = cadence
     if args.act_latency > 0.0:
         kwargs["act_latency_frames"] = args.act_latency
+    if args.cadence_feature is not None:
+        kwargs["cadence_feature_override"] = args.cadence_feature
     return DinoEnv(**kwargs)
 
 
@@ -281,6 +283,14 @@ if __name__ == "__main__":
     ap.add_argument("--act-latency", type=float, default=0.0, dest="act_latency",
                     help="sim only: observe->act delay in frames (measured "
                          "visible ~0.25); action lands after the first substep(s)")
+    ap.add_argument("--poll", type=float, default=None,
+                    help="browser only: override GAME_CONFIG poll_interval (s) "
+                         "— E12 recipe deploys at 0.02")
+    ap.add_argument("--cadence-feature", type=float, default=None,
+                    dest="cadence_feature",
+                    help="sim only: report THIS value (frames) in the cadence "
+                         "feature regardless of realized cadence — isolates "
+                         "feature-OOD from true timing dependence (E12 probe)")
     ap.add_argument("--headless", action="store_true")
     ap.add_argument("--maxspeed", type=float, default=None,
                     help="cap game speed (both modes), e.g. 7.5 = live in the windup band")
