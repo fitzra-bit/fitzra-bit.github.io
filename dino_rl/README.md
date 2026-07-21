@@ -28,7 +28,7 @@ seeds) drives phase gates and stall detection; **Deploy GATE %** — P(reach the
 windup gate, score ≥2,500) — drives `best_model` selection (gate-lex). Median
 alone was retired: it saturates at the frame cap and froze selection.
 
-## Current champion & deployment timing (2026-07-07)
+## Current champion & deployment timing (2026-07-18)
 
 The metric that matters is **SCORE in the real-time, visible browser** — the
 game as actually played. A long investigation (`EXPERIMENTS.md`,
@@ -38,16 +38,34 @@ to a shorter arc than the sim used in training. The fix keeps the authentic
 game and matches the sim to it — `DinoEnv` now models the true physics quantum
 (`fe`), the measured decision clock (`cadence_samples`), and act latency.
 
+The current champion adds two more measured levers: closing-velocity features
+(E11 — the birds' hidden speed offset, unobservable in one snapshot) and a
+**20ms decision clock** (E12 — the 50ms poll left only ~46px between decisions
+at top speed; 20ms is both faster AND cleaner, and it roughly doubled the
+recipe's endurance). Poll rate is part of the agent, not the game.
+
 ```bash
-# Watch the champion (26-feature [26,256,128], trained on the true timing model)
+# Watch the champion (28-feat, 20ms clock — --poll 0.02 REQUIRED: it reads its
+# decision cadence and collapses on the 50ms default)
+python main.py --demo --load models/validated_pollrate_20260710/best_model.pt --poll 0.02
+
+# The E8 reference artifact (26-feat, 50ms clock)
 python main.py --demo --load models/validated_capacity_20260707/best_model.pt
 ```
 
-| Champion | visible gate | full-run median | endurance (200k-frame farm) |
-|---|---|---|---|
-| `validated_capacity_20260707` (E8) | 95% | 22,220 | 29/30 survive (no death) |
-| `validated_timing_20260705` (E5, prior) | 95% | 22,070 | — |
-| v2b (pre-timing-fix) | ~70% | 21,704 | 21/30 die |
+Score comparisons are only valid at a MATCHED step cap and, ideally,
+interleaved in one session (EXPERIMENTS.md amendments 7–8; a cap-mismatched
+comparison briefly mis-promoted E12 before the real, matched test did it
+properly):
+
+The 2026-07-19 day-matched, ceiling-matched (~35k) head-to-head settled it:
+
+| Model | P(reach 35k) | median | mean/game | MSBD | notes |
+|---|---|---|---|---|---|
+| `validated_pollrate_20260710` (E12) — **champion** | 8/10 | 33,890 (censored) | **30,239** | 151k | requires `--poll 0.02`, `--layers 28,256,128` |
+| `validated_capacity_20260707` (E8) | 5/10 | 26,794 | 23,453 | 47k | 50ms clock; confirmed 2026-07-20 interleaved rerun (E8 mean 27,026 vs E12 33,846) |
+| `validated_timing_20260705` (E5, prior) | — | ≥22,070 @ old cap | — | — | 50ms clock |
+| v2b (pre-timing-fix) | — | 21,704 | — | — | |
 
 Judge a checkpoint: `python gate_battery.py --load <m> --episodes 20` (visible)
 or add `--sim --fe 0.4138 --cadence-file measurements/cadence_visible_20260705.npy
@@ -137,7 +155,8 @@ through the curriculum far faster in wall-clock and in a tiny genome.
 
 Validated checkpoints live in `models/` (newest first):
 
-- `models/validated_capacity_20260707/` — **current champion** (E8, 26-feat `[26,256,128]`, true timing model; needs `--layers 26,256,128` in diagnostics)
+- `models/validated_capacity_20260707/` — **current champion** (E8, 26-feat `[26,256,128]`, 50ms clock; needs `--layers 26,256,128` in diagnostics)
+- `models/validated_pollrate_20260710/` — E12 candidate (28-feat `[28,256,128]`, 20ms clock; needs `--poll 0.02` + `--layers 28,256,128` everywhere; promotion retracted pending same-ceiling head-to-head)
 - `models/validated_timing_20260705/` — E5 champion (26-feat, first trained on the true timing model)
 - `models/validated_20260612/` — sim-era DQN (eval 11,087; browser transfer only under lockstep — see OVERHAUL.md correction)
 - `models/genetic_validated_20260612_fixed/` — GA champion (eval 11,087, adaptive cap)

@@ -421,3 +421,158 @@ driver's consecutive-read matching reproduces the sim estimator faithfully —
 the E11 feature is real at deploy, not a sim-only artifact. Only visible
 protocol (physical display) now remains before promotion. Tool:
 `closing_v_check.py`.
+
+**Visible confirmation, candidate seed 0 @ poll 0.02 (20 eps, physical
+145Hz display, 2026-07-12): GATE 6/20 = 30% (CI 15–52) — FAILS the ≥80%
+promotion bar. NOT PROMOTED.** Sim→visible gap: calibrated-sim 100% →
+visible 30%. Signature is anomalous and uniform: all 14 deaths at speed
+EXACTLY 13.0 (MAX_SPEED), scores tightly 2222–2300 (just short of the 2500
+gate), death cause null ("?") on every one. Null cause is mechanically odd —
+dino.html sets `crashed=true` and `deathCause=cause` together (only when
+`checkCollision()!==null`), so a genuine collision should always carry a
+cause; 14/14 nulls suggests EITHER a real top-speed failure the sim misses
+OR a 20ms-visible harness artifact (spurious crash read / two-execute_script
+race at max game speed). **OPEN — not resolved.** Discriminating test (needs
+display): run E8 champion (known ~22k visible median @50ms) at poll 0.02 —
+same 2250/speed-13/null failure ⇒ harness artifact (30% is not a policy
+verdict); plays fine ⇒ candidate-specific real gap. Until resolved, E12's
+sim-level ADOPT stands but the RECIPE IS NOT VISIBLE-CONFIRMED; no champion
+change. clean_realtime deferred (gate failed).
+
+**RESOLVED (2026-07-17): the 30% visible gate was instrument censoring, not
+policy failure.** Discriminator (E8 @ 20ms visible): 18/20 died EARLY with
+real causes (windup cacti, median 150 — matches the sim OOD-collapse probe,
+median 122, nearly number-for-number); its 2 lucky max-speed episodes "died"
+at 2283/2273, speed 13.0, cause null — the exact candidate signature. Two
+different policies sharing one death spot = harness. Mechanism: `cause=None`
+(not '?') means the episode ended WITHOUT crashed=true — gate_battery's
+--max-steps default (5,000) × ~1.77 realized f/step ≈ 8,850 frames ≈ score
+~2,260: alive at the cap, just short of the 2,500 gate line. All 14
+"deaths" were censored-alive episodes. Instrument fixed: capped episodes now
+report CENSORED_ALIVE, excluded from the death profile.
+
+**Visible gate RERUN (--max-steps 15000, 20 eps, 2026-07-17): 16/20 = 80%
+(CI 58–92) — MEETS the ≥80% promotion bar exactly.** 4 real deaths, diverse
+(cactus_small 7.6/12.2, cactus_large 10.8, bird_mid 13.0). Best visible gate
+ever measured (v2b 70%, E2 candidates 45–50%). Zero margin — recorded as-is;
+the bar is the bar in both directions. Proceeding to clean_realtime (10 eps,
+poll 0.02, high step cap) — the crowning metric vs E8's visible median 22,220.
+
+**Crowning run (clean_realtime, 10 eps, poll 0.02, step cap 50k ≈ score
+~27.3k, 2026-07-18): median 27,263 — RIGHT-CENSORED (8/10 episodes ALIVE at
+the cap; true median higher). Beats E8's visible 22,220 by ≥23%. Deaths 2/10
+(bird_low, cactus_large @ spd 11–13).**
+
+**PROMOTED 2026-07-18: `models/validated_pollrate_20260710` (E12 seed 0) is
+CHAMPION.** Full protocol: visible gate 16/20 = 80% (bar met exactly) +
+crowning median > predecessor (censored-low, still +23%). Deploy contract:
+**--poll 0.02 required everywhere** (cadence feature OOD-collapses at 50ms —
+symmetric to E8 collapsing at 20ms; poll rate is part of the artifact).
+E8 (`validated_capacity_20260707`) retained as best 50ms-clock artifact.
+README + model READMEs updated; main.py --demo grew --poll.
+
+**Program state after E12:** windup gate solved at distribution level (E5/
+fe+cadence), observability hole closed (E11), decision quantization halved
+(E12). Remaining measured frontier: (a) visible gate 80% vs sim 100% — the
+residual sim→visible gap now lives in the 4 real gate deaths (windup cactus
++ mid-band cactus + top-speed bird), (b) the 0.66 f/dec spin floor (second
+rung, untested), (c) E11's first-sighting-blind residual + slow-low-bird
+cell, (d) harvest variance (arm seeds 74–100% gate). No arm registered yet
+for any of these.
+
+**⚠ CORRECTION + PROMOTION RETRACTED (2026-07-19, Ryan's catch):** the
+crowning comparison above is INVALID. E8's "median 22,220" was itself
+right-censored — its crowning record reads "9/10 at ceiling": 22,220 IS
+E8's instrument cap, not a death score. E12's 27,263 was taken at a cap I
+raised to ~27.3k. Comparing two censored floors at two different ceilings
+says nothing about which true median is higher — the "+23%" was the cap
+difference, not measured performance. (Same flaw further back: E8-over-E5's
+"22,220 vs 22,070, both 9/10 at ceiling" was cap-noise; the full-run-median
+column has tracked the cap of the day across the whole champion lineage. The
+gate and the sim endurance farm were doing the real discrimination.)
+
+Like-for-like, everything measured favors E8: gate 95 vs 80; P(reach 22.2k)
+90% vs 80%. E12's demonstrated edge exists only above E8's old cap — where
+E8 was never tested and its sim endurance (29/30 @200k farm) predicts it may
+also cruise. **`validated_capacity_20260707` (E8) REMAINS CHAMPION.** E12
+seed 0 status: candidate — visible gate 80% (bar met), higher-ceiling
+evidence real but not comparative.
+
+**Standing-rule amendments (6) and (7):** (6) a censored median must be
+reported as "≥cap (k/n censored)", never as a point value; (7) cross-artifact
+score comparisons require the SAME score ceiling (frames-equivalent across
+clocks) on both sides — a number taken at a different cap is a different
+instrument (this is measurement failure #3's subtler sibling: the cap doesn't
+just censor, it MANUFACTURES differences when it moves between tests).
+
+**Fair head-to-head (registered, pending Ryan's go — needs display time):**
+both artifacts, 10 eps clean_realtime each, SAME score ceiling ≈34k (100k
+frames: E8 @50ms --max-steps ~27000; E12 @20ms --max-steps ~57000), each on
+its own clock. Pre-registered read: champion = better on {gate (already
+measured), same-ceiling median, deaths-per-exposure}; reliability AND
+ceiling both count (Ryan 2026-07-19: "overall performance and
+consistency/reliability BOTH matter"). If both saturate 34k, escalate the
+ceiling or switch to visible MSBD (failure-budget).
+
+**Head-to-head leg 1 — E8 @50ms, ceiling ~36k (10 eps, 2026-07-19):**
+`[36470, 36283, 36019, 34317, 33713 | deaths 19874, 16874, 13059, 7748 @spd
+13, 171 @7.1]` — median 26,794, mean 23,453, 5/10 cap-outs. **E8's old
+"22,220, 9/10 at ceiling" was concealing a ~50% mid-cruise death band at
+7.7k–19.9k.** Same-ceiling analysis (both censored at E12's 27.26k cap):
+P(ceiling) E8 5/10 vs E12 8/10; censored median 23,568 vs 27,263; MSBD ~47k
+vs ~111k (E12's exposure capped lower — bias against E12); gate 95 vs 80
+(E8's one lead). No single comparison significant at n=10/20; nominal
+pattern = Outcome B: neither dominates, every long-run axis favors E12,
+early-game gate favors E8. Leg 2 (E12 @20ms, matched ~35k ceiling) running —
+completes MSBD at equal exposure.
+
+**Head-to-head leg 2 — E12 @20ms, matched ~35k ceiling (10 eps, 2026-07-19):**
+`[35330, 34105, 33921, 33914, 33897, 33883, 33861, 33858 | deaths 23939
+(cactus_large), 5682 (bird_high), both @spd 13]` — 8/10 cap-outs, median
+33,890 (censored), mean 30,239, zero sub-2,500 deaths this run. **Matched-
+instrument verdict: E12 leads P(ceiling) 8/10 vs 5/10, median +26%, mean
++29%, MSBD 151k vs 47k (3.2×). E8 retains the early-game edge: pooled
+sub-2,500 rate ~6% vs ~15% across all visible episodes.** Promotion decision
+= Ryan's both-matter weighing; recommendation on record: promote E12 on
+per-game expected score (+29%, which already prices the early deaths in),
+register the early-game cell (E12's 1-in-7 sub-2.5k starts; suspects:
+unmeasured cruise-band 20ms clock is NOT this cell — windup/mid transient,
+first-read cadence placeholder, E2-lineage) as the next repair arm.
+
+**PROMOTED (Ryan's call, 2026-07-19): `validated_pollrate_20260710` (E12
+seed 0) is CHAMPION** on the day-matched, ceiling-matched head-to-head (mean
++29%, median +26%, MSBD 3.2×; E8's early-game edge noted and accepted as a
+repair-arm target, not a blocker). E8 (`validated_capacity_20260707`)
+retained as the 50ms-clock reference artifact. Deploy contract: --poll 0.02.
+
+**Amendment (8):** visible A/B comparisons must INTERLEAVE artifacts
+episode-by-episode within one session — day-matched by construction. Basis:
+E8's P(reach 22.2k) swung 9/10 → 5/10 across 12 days (sampling noise at
+n=10 + measured platform drift, 50ms cadence 3.56→3.72 f/dec; cross-era
+number comparisons are unreliable in both directions).
+
+**Confirmation run (registered, launching now): interleaved A/B, 10 eps per
+side, matched ~35k ceiling (E8 @50ms/30k steps, E12 @20ms/62k steps), new
+instrument `ab_realtime.py`. Pre-registered read: the promotion STANDS
+unless E8 wins mean-per-game in the interleaved rerun, in which case the
+crown is re-examined with all three day-matched pairs on the table.**
+
+**Confirmation — INTERLEAVED A/B, day-matched, 10 eps/side, matched ~35k
+ceiling (`ab_realtime.py`, 2026-07-19/20):**
+- **A = E8 @50ms:** median 33,556, mean 27,026, 8/10 cap-outs, 2 deaths
+  (both cactus_small @ spd 7.3–7.4, scores 215/241), MSBD 135,132.
+- **B = E12 @20ms:** median 33,849, **mean 33,846**, **10/10 cap-outs, 0
+  deaths**, MSBD ∞. Astonishingly tight (33,785–33,917).
+- **VERDICT: B wins mean/game 33,846 vs 27,026 (+25%) AND reliability
+  (0 vs 2 early deaths).** Pre-registered stake was "promotion stands unless
+  E8 wins mean-per-game" → E8 lost → **PROMOTION CONFIRMED, LOCKED.**
+
+**Correction to the earlier "E8 has the early-game edge" claim:** that was a
+noisy snapshot (E8's July-7 gate 95% vs E12's 80% on different days). Pooled
+across ALL visible episodes, sub-2,500 early-death rates are a WASH — E12
+~6/50 (12%), E8 ~4/40 (10%) — both dominated by windup cactus_small/large,
+statistically indistinguishable at these n. In this day-matched interleaved
+run E12 was actually the cleaner of the two (0 vs 2). Honest read: **E12
+wins mean/MSBD robustly and repeatedly; the early-game cactus cell is a
+SHARED weakness of both artifacts, not an E8 advantage — and it is the
+clear next target (repair arm, benefits any champion on this recipe).**

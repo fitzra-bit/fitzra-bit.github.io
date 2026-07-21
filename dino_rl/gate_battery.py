@@ -51,7 +51,13 @@ def summarize(results, threshold):
     s = np.array([r[1] for r in results])
     print(f"== SCORE: median {np.median(s):.0f}  p10 {np.percentile(s, 10):.0f}  "
           f"p90 {np.percentile(s, 90):.0f}  max {s.max():.0f}")
-    deaths = [r for r in results if not r[0]]
+    capped = [r for r in results if not r[0] and r[3] == "CENSORED_ALIVE"]
+    deaths = [r for r in results if not r[0] and r[3] != "CENSORED_ALIVE"]
+    if capped:
+        cs = np.array([r[1] for r in capped])
+        print(f"== CENSORED (alive at step cap, NOT deaths): {len(capped)} eps, "
+              f"scores {cs.min():.0f}-{cs.max():.0f} — raise --max-steps if "
+              f"these should have reached the threshold")
     if deaths:
         ds = np.array([r[2] for r in deaths])
         causes = Counter(r[3] or "?" for r in deaths)
@@ -107,9 +113,18 @@ def run_browser(args, net, n_in):
             if not passed and last.crashed:
                 cause = d.driver.execute_script(
                     "return Runner.instance_.deathCause;") or "?"
+            elif not passed:
+                # Loop exhausted --max-steps (or a state read failed) with the
+                # dino ALIVE — this is CENSORING, not a death. Lumping these in
+                # as '?' deaths produced a phantom failure mode at 20ms poll
+                # (2026-07-12: 14 'deaths' at score ~2250 = the 5,000-step cap,
+                # ~1.77 realized f/step, landing just short of the 2500 gate).
+                cause = "CENSORED_ALIVE"
             results.append((passed, last.score, last.speed, cause))
-            print(f"  ep {ep:2d}: {'PASS' if passed else 'FAIL'}  score {last.score:7.0f}"
-                  f"{'' if passed else '  (died spd %.1f, %s)' % (last.speed, cause)}")
+            tag = ("PASS" if passed else
+                   "CAPPED" if cause == "CENSORED_ALIVE" else "FAIL")
+            print(f"  ep {ep:2d}: {tag:6s}  score {last.score:7.0f}"
+                  f"{'' if passed else '  (%s spd %.1f, %s)' % ('alive at cap' if cause == 'CENSORED_ALIVE' else 'died', last.speed, cause)}")
     finally:
         d.close()
     return results

@@ -243,7 +243,8 @@ def run_demo(args):
     print("Mode:    demo (ε=0, no training, no buffer)")
     print("Control: Ctrl+C to stop\n")
 
-    poll       = GAME_CONFIG["poll_interval"]
+    poll       = (GAME_CONFIG["poll_interval"] if getattr(args, "poll", None) is None
+                  else args.poll)
     dbg_every  = getattr(args, "debug_steps", 0)
     lockstep   = getattr(args, "lockstep", False)
     n_frames   = cfg["action_repeat"]
@@ -445,6 +446,14 @@ def main():
         default=None,
         dest="net_layers",
         help="DQN training: override network_layers, e.g. 26,256,128 (capacity arms)",
+    )
+    parser.add_argument(
+        "--poll",
+        type=float,
+        default=None,
+        help="Demo: override poll_interval (s). The 2026-07 champion was "
+             "trained for the 20ms clock — demo it with --poll 0.02 (at the "
+             "default 50ms its cadence feature goes OOD and it collapses).",
     )
     parser.add_argument(
         "--cadence-file",
