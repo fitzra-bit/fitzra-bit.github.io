@@ -99,6 +99,39 @@ dino.html?maxspeed=9&accel=0.0005 # gentler pacing (custom phases)
 
 Playable by hand too: space/↑ = jump, ↓ = duck.
 
+### Rendering (visual only — physics untouched)
+
+The renderer had drifted from the simulation it draws. The T-Rex's three leg
+sprites were allocated 14 rows and drawn in only 5–7 of them, so the dino ran
+7–9 px **above** the ground line every cactus sits flush on; the ducking sprite
+stopped 10 px short of its own hitbox; and the two pterodactyl frames shared no
+pixels, so the bird strobed vertically instead of flapping. A visual pass fixed
+those and tidied the draw layer:
+
+- every sprite now bottoms out on y139, one pixel above the ground bar
+- `bmp()` takes a declared `(w, h)` and warns on mismatch — it never throws,
+  because it runs upstream of `window.Runner` and a throw would silently
+  zero every episode
+- ground is one 2400 px pre-built strip (2 `drawImage`) instead of 33 `fillRect`
+  per frame, and its scroll phase is a pure function of `rawDistance`, never an
+  accumulator — `draw()` runs once per `stepFrames(n)` batch, so an accumulator
+  would drift with the agent's `action_repeat`
+- the HUD is a 10×13 bitmap font, removing the last `ctx.fillText` (and the last
+  canvas text state) from the draw path
+- a landing dust puff and a jump shadow, both draw-owned state only
+
+**Nothing about gameplay changed.** The agents read numeric state through
+`Runner.instance_`, never pixels, and the physics constants, `update()`,
+`checkCollision()`, the spawner, the `tRex`/`runner` interfaces, `stepFrames()`
+and the lockstep loop are all byte-identical. This was verified two ways: a
+region-by-region diff of every simulation function, and a 636-scenario lockstep
+replay (5 speeds × 2 obstacle types × 3 group sizes × 21 jump-takeoff frames,
+plus duck sweeps — 481 crashes and 155 clears) whose full state traces match the
+pre-change build exactly. The PRNG stream is also untouched: the cloud recycler
+draws from the *same* global `Math.random()` stream as the obstacle spawner, so
+adding or removing even one cloud would reshuffle every future obstacle
+sequence — the decorative ground strip therefore uses its own seeded xorshift.
+
 ## The curriculum (`curriculum.py`)
 
 Rewards never change (+1 clear, −1 death). Difficulty ramps through the
