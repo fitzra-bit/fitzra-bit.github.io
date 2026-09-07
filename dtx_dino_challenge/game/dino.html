@@ -1,0 +1,972 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Dino RL</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#fff; display:flex; align-items:center; justify-content:center; height:100vh; }
+#wrap { position:relative; }
+canvas { display:block; image-rendering: pixelated; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c" width="1200" height="300"></canvas></div>
+<script>
+(function(){
+"use strict";
+
+// ════════════════════════════════════════════════════════════════════
+//  Chrome Dino clone — physics & pace match the original Chromium
+//  offline game (components/neterror/resources/offline.js).
+//
+//  Simulation runs in the ORIGINAL coordinate space: 600 × 150,
+//  ground line at y=140 (BOTTOM_PAD 10), tRex ground yPos = 93.
+//  Rendered at 2× scale onto a 1200×300 canvas.
+//
+//  The Runner.instance_ API matches what game/chrome_driver.py reads,
+//  so the RL driver works unchanged.
+//
+//  Curriculum control via URL params (no file edits between phases):
+//    ?birds=0|1        allow pterodactyls           (default 1)
+//    ?birdmin=8.5      min speed before birds spawn (default 8.5, original)
+//    ?maxspeed=13      speed cap                    (default 13, original)
+//    ?accel=0.001      acceleration per frame       (default 0.001, original)
+//
+//  This build runs in REAL TIME only. The lockstep / fixed-timestep hooks
+//  present in the research build are deliberately absent: the wall-clock
+//  jitter is part of the problem you are being asked to solve.
+//  Example Phase-1 URL:  dino.html?birds=0
+// ════════════════════════════════════════════════════════════════════
+
+// ── URL-param curriculum config ──────────────────────────────────────
+const Q = new URLSearchParams(location.search);
+const ALLOW_BIRDS    = Q.get('birds')    !== '0';
+const BIRD_MIN_SPEED = parseFloat(Q.get('birdmin')  || '8.5');
+const MAX_SPEED      = parseFloat(Q.get('maxspeed') || '13');
+const ACCELERATION   = parseFloat(Q.get('accel')    || '0.001');
+
+// ── Original game constants ──────────────────────────────────────────
+const W = 600, H = 150;            // simulation space (original)
+const SCALE = 2;                   // render scale
+const MS_PER_FRAME = 1000 / 60;    // physics normalised to 60fps frames
+const BOTTOM_PAD   = 10;
+const GROUND_LINE  = H - BOTTOM_PAD;        // 140 — feet / cactus base
+const GRAVITY      = 0.6;
+const INITIAL_JUMP_VELOCITY = -10;          // minus speed/10 at takeoff
+const DROP_VELOCITY = -5;                   // ascent cap after max height
+const MAX_JUMP_Y    = 30;                   // yPos above which ascent is capped
+const SPEED_DROP_COEFFICIENT = 3;           // fast-fall multiplier (duck in air)
+const INITIAL_SPEED = 6;
+const GAP_COEFFICIENT = 0.6;
+const MAX_GAP_COEFFICIENT = 1.5;
+const MAX_OBSTACLE_LENGTH = 3;              // cactus group size
+const MAX_OBSTACLE_DUPLICATION = 2;         // no 3 identical in a row
+const CLEAR_TIME = 3000;                    // ms before first obstacle
+
+// tRex dimensions (original sprite sizes)
+const TREX = { X: 50, W: 44, H: 47, W_DUCK: 59, H_DUCK: 25 };
+const TREX_GROUND_Y = GROUND_LINE - TREX.H;   // 93 — matches chrome_driver default
+
+// Obstacle type definitions (original obstacle config)
+const OB_TYPES = {
+  CACTUS_SMALL: { w: 17, h: 35, yPos: 105, minGap: 120, multipleSpeed: 4 },
+  CACTUS_LARGE: { w: 25, h: 50, yPos: 90,  minGap: 120, multipleSpeed: 7 },
+  PTERODACTYL:  { w: 46, h: 40, yPositions: [100, 75, 50], minGap: 150,
+                  minSpeed: BIRD_MIN_SPEED, speedOffset: 0.8 },
+};
+
+// ── Pixel-art sprites ────────────────────────────────────────────────
+// Cell = 1 game px. '#' = body colour. Hand-drawn to match the
+// original silhouettes at original sizes.
+
+// Parse a sprite string → {w, h, rows}, padded/truncated to the declared size.
+//
+// NEVER throws, not even on a malformed sprite. bmp() runs at module scope,
+// upstream of `window.Runner = {instance_: runner}`; a throw here would abort
+// the IIFE, Runner would never exist, and chrome_driver.py swallows the
+// resulting injection error — every episode would silently score zero with no
+// stack trace anywhere. A console warning is the only safe failure mode.
+function bmp(rows, w, h) {
+  const mw = Math.max(...rows.map(r => r.length));
+  w = w || mw;
+  h = h || rows.length;
+  if (mw > w || rows.length !== h) {
+    console.warn('[dino sprite] declared ' + w + 'x' + h +
+                 ', measured ' + mw + 'x' + rows.length);
+  }
+  const padded = rows.map(r =>
+    r.length < w ? r + '.'.repeat(w - r.length) : r.slice(0, w));
+  // h always follows rows.length so renderSprite's y < b.h loop cannot read
+  // an undefined row even if the declared height disagrees.
+  return { w: w, h: rows.length, rows: padded };
+}
+
+// T-Rex standing/running body 44×47 — head right, tail left.
+const DINO_BODY = bmp([   // T-Rex body 44x34 — legs blit at LEG_OFFSET_Y below this
+"............................############....",
+"..........................################..",
+".........................##################.",
+".........................###################",
+"........................############..######",
+"........................############..######",
+"........................####################",
+"........................###################.",
+"........................#################...",
+"........................##########..........",
+".......................##########...........",
+"......................##########............",
+".....................##########.............",
+"....................###########.............",
+"#####..............############.............",
+"#######..........###############............",
+"##########.....#################............",
+"#################################...........",
+"#################################...........",
+".################################...........",
+"....#############################...........",
+".......###########################..........",
+".........####################.####..........",
+"..........##################..####..........",
+"..........#################...#####.........",
+"..........#################.................",
+"..........#################.................",
+"..........################..................",
+"..........################..................",
+"..........###############...................",
+"..........##############....................",
+".........##############.....................",
+".........#############......................",
+".........############......................."], 44, 34);
+
+// Leg frames drawn below the body block (rows 33-46 of the 47px sprite)
+const LEGS_RUN_A = bmp([   // near leg planted, far leg lifted and swung forward
+".........############.......................",
+".........############.......................",
+".........############.......................",
+".........####....####.......................",
+".........####....####.......................",
+".........####....#####......................",
+".........####.....#####.....................",
+".........####......#####....................",
+".........####......#######..................",
+".........####...............................",
+".........####...............................",
+".........####...............................",
+".........####...............................",
+".......#######.............................."], 44, 14);
+const LEGS_RUN_B = bmp([   // far leg planted, near leg lifted and swung back
+".........############.......................",
+".........############.......................",
+".........############.......................",
+".........####....####.......................",
+".........####....####.......................",
+"........#####....####.......................",
+".......#####.....####.......................",
+"......#####......####.......................",
+"....#######......####.......................",
+".................####.......................",
+".................####.......................",
+".................####.......................",
+".................####.......................",
+"................#######....................."], 44, 14);
+const LEGS_STAND = bmp([   // both feet planted (jump / idle / dead)
+".........############.......................",
+".........############.......................",
+".........############.......................",
+".........####....####.......................",
+".........####....####.......................",
+".........####....####.......................",
+".........####....####.......................",
+".........####....####.......................",
+".........####....####.......................",
+".........####....####.......................",
+".........####....####.......................",
+".........####....####.......................",
+".........####....####.......................",
+".......#######..#######....................."], 44, 14);
+
+// Ducking T-Rex 59×25 — long flat body, head low at right.
+const DINO_DUCK = bmp([   // ducking T-Rex 59x25 — snout leads, feet flush at row 24
+"............................................#########......",
+"...........................................#####..####.....",
+"..........................................######..####.....",
+"####......................................############.....",
+"######................................################.....",
+"########.........................###################.......",
+".#########..............##########################.........",
+"..###########...################################...........",
+"....###########################################............",
+"....##########################################.............",
+"....#########################################..............",
+"....########################################...............",
+".....#####################################.................",
+".......################################....................",
+"........###########################........................",
+".........#####################.............................",
+"..........###############..................................",
+"..........####..####.......................................",
+"..........####..####.......................................",
+"..........##.....##........................................",
+"..........##.....##........................................",
+"..........##.....##........................................",
+"..........##.....##........................................",
+"..........##.....##........................................",
+"........######.######......................................"], 59, 25);
+
+// Small cactus 17×35
+const CACTUS_S = bmp([   // small cactus 17x35
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+".##...#####...##.",
+"###...#####...###",
+"###...#####...###",
+"###...#####...###",
+"###...#####...###",
+"###...#####...###",
+"###...#####...###",
+"###...#####...###",
+"###...#####...###",
+"###...#####...###",
+".###..#####..###.",
+"..###.#####.###..",
+"...###########...",
+"....#########....",
+".....#######.....",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......",
+"......#####......"], 17, 35);
+
+// Large cactus 25×50
+const CACTUS_L = bmp([   // large cactus 25x50
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".####....#######....####.",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+"#####....#######....#####",
+".#####...#######...#####.",
+"..#####..#######..#####..",
+"...###################...",
+".....###############.....",
+".......###########.......",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######.........",
+".........#######........."], 25, 50);
+
+// Pterodactyl 46×40 — flies left (beak toward dino), two wing frames
+const BIRD_UP = bmp([   // wing raised; beak/head/body/tail shared with BIRD_DOWN
+"..............................................",
+"..............................................",
+"..............................#######.........",
+".............................########.........",
+"............................#########.........",
+"............................#########.........",
+"...........................#########..........",
+"...........................#########..........",
+"..........................#########...........",
+"..........................#########...........",
+".........................#########............",
+".........................########.............",
+".........................#######..............",
+".......................##########.............",
+"......................#############...........",
+".............########################.........",
+"...........###########################........",
+"..........####..#######################.......",
+"......########..########################......",
+"..#######################################.....",
+"###########################################...",
+"....#########################################.",
+".........#####################################",
+".............################################.",
+"....................#####################.....",
+".....................################.........",
+"......................############............",
+".......................#########..............",
+"........................#######...............",
+".........................#####................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+".............................................."], 46, 40);
+const BIRD_DOWN = bmp([   // wing swept below; body identical to BIRD_UP
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+"..............................................",
+".........................#######..............",
+".......................##########.............",
+"......................#############...........",
+".............########################.........",
+"...........###########################........",
+"..........####..#######################.......",
+"......########..########################......",
+"..#######################################.....",
+"###########################################...",
+"....#########################################.",
+".........#####################################",
+".............################################.",
+"....................#####################.....",
+".....................################.........",
+"......................############............",
+".......................#########..............",
+"........................#######...............",
+".........................#####................",
+".........................######...............",
+"........................#######...............",
+".......................#######................",
+".......................#######................",
+"......................#######.................",
+"......................#######.................",
+".....................#######..................",
+".....................#######..................",
+"....................#######...................",
+".............................................."], 46, 40);
+
+// Cloud 46×14
+const CLOUD = bmp([   // cloud 46x14 — soft lobed top, flat base
+"................#########.....................",
+"...............#################..............",
+"...........######################.............",
+".........#########################............",
+"........##############################........",
+".......################################.......",
+".......#################################......",
+".......#################################......",
+".......##################################.....",
+".......##################################.....",
+".......##################################.....",
+".......##################################.....",
+".......##################################.....",
+".............................................."], 46, 14);
+
+// ── Canvas ───────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+// Monochrome by design — #535353 on #ffffff IS the identity of this game.
+// The extra entries are achromatic tints of the body colour, giving recessive
+// elements (cloud, HI block, dust, shadow) a legible depth ramp toward white.
+const PALETTE = {
+  body:    '#535353',
+  bg:      '#ffffff',
+  cloud:   '#c4c4c4',   // was #dadada — ~10% luminance on white, near-invisible
+  score:   '#535353',
+  scoreHi: '#a0a0a0',
+  dust:    ['#9a9a9a', '#bdbdbd', '#dcdcdc'],
+  shadow:  '#e4e4e4',
+};
+const BODY_COL = PALETTE.body;   // renderSprite's default colour argument
+const BG_COL   = PALETTE.bg;
+
+// Pre-render sprites to offscreen canvases for fast blitting
+function renderSprite(b, col) {
+  const oc = document.createElement('canvas');
+  oc.width = b.w * SCALE; oc.height = b.h * SCALE;
+  const c2 = oc.getContext('2d');
+  c2.fillStyle = col || BODY_COL;
+  for (let y = 0; y < b.h; y++) {
+    const row = b.rows[y];
+    for (let x = 0; x < row.length; x++) {
+      if (row[x] === '#') c2.fillRect(x * SCALE, y * SCALE, SCALE, SCALE);
+    }
+  }
+  return oc;
+}
+
+const SPR = {
+  body:     renderSprite(DINO_BODY),
+  legsA:    renderSprite(LEGS_RUN_A),
+  legsB:    renderSprite(LEGS_RUN_B),
+  legsStand:renderSprite(LEGS_STAND),
+  duck:     renderSprite(DINO_DUCK),
+  cactusS:  renderSprite(CACTUS_S),
+  cactusL:  renderSprite(CACTUS_L),
+  birdUp:   renderSprite(BIRD_UP),
+  birdDown: renderSprite(BIRD_DOWN),
+  cloud:    renderSprite(CLOUD, PALETTE.cloud),
+};
+
+// Legs blit this far below the body's origin; equals DINO_BODY.h - 1 so the
+// two sprites compose into one continuous TREX.H (47px) dino.
+const LEG_OFFSET_Y = 33;
+
+// ── Bitmap HUD font ──────────────────────────────────────────────────
+// 10x13 pixel glyphs replace canvas fillText, which was the one antialiased
+// element on an otherwise pixel-perfect screen. Pre-rendering two colour sets
+// also removes the last ctx.font / textAlign state from the draw path.
+const FONT_W = 10, FONT_H = 13, FONT_PITCH = 11;
+
+const GLYPH_SRC = {
+  '0': ["..######..",".########.","##......##","##......##","##......##","##......##","##......##","##......##","##......##","##......##","##......##",".########.","..######.."],
+  '1': ["....##....","...###....","..####....","....##....","....##....","....##....","....##....","....##....","....##....","....##....","....##....","..######..","..######.."],
+  '2': ["..######..",".########.","##......##","........##","........##",".......##.",".....###..","...###....","..##......",".##.......","##........","##########","##########"],
+  '3': ["..######..",".########.","##......##","........##","........##","....#####.","....#####.","........##","........##","##......##","##......##",".########.","..######.."],
+  '4': ["......##..",".....###..","....####..","...##.##..","..##..##..",".##...##..","##....##..","##########","##########","......##..","......##..","......##..","......##.."],
+  '5': ["##########","##########","##........","##........","##........","########..",".########.","........##","........##","##......##","##......##",".########.","..######.."],
+  '6': ["...#####..","..######..",".##.......","##........","##........","########..",".########.","##......##","##......##","##......##","##......##",".########.","..######.."],
+  '7': ["##########","##########","........##","........##",".......##.",".......##.","......##..","......##..",".....##...",".....##...","....##....","....##....","....##...."],
+  '8': ["..######..",".########.","##......##","##......##",".########.","..######..",".########.","##......##","##......##","##......##","##......##",".########.","..######.."],
+  '9': ["..######..",".########.","##......##","##......##","##......##",".########.","..#######.","........##","........##","........##",".......##.","..######..","..#####..."],
+  'H': ["##......##","##......##","##......##","##......##","##......##","##########","##########","##......##","##......##","##......##","##......##","##......##","##......##"],
+  'I': ["..######..","..######..","....##....","....##....","....##....","....##....","....##....","....##....","....##....","....##....","....##....","..######..","..######.."],
+  'A': ["..######..",".########.","##......##","##......##","##......##","##......##","##########","##########","##......##","##......##","##......##","##......##","##......##"],
+  'E': ["##########","##########","##........","##........","##........","########..","########..","##........","##........","##........","##........","##########","##########"],
+  'G': ["..######..",".########.","##......##","##........","##........","##...#####","##...#####","##......##","##......##","##......##","##......##",".########.","..######.."],
+  'M': ["##......##","###....###","####..####","##.####.##","##..##..##","##......##","##......##","##......##","##......##","##......##","##......##","##......##","##......##"],
+  'O': ["..######..",".########.","##......##","##......##","##......##","##......##","##......##","##......##","##......##","##......##","##......##",".########.","..######.."],
+  'R': ["########..","#########.","##......##","##......##","##......##","#########.","########..","##..##....","##..###...","##...###..","##....###.","##.....###","##......##"],
+  'V': ["##......##","##......##","##......##","##......##","##......##","##......##",".##....##.",".##....##.","..##..##..","..##..##..","...####...","....##....","....##...."],
+};
+
+const FONT    = {};   // live score / GAME OVER
+const FONT_HI = {};   // recessive HI block
+for (const ch in GLYPH_SRC) {
+  const b = bmp(GLYPH_SRC[ch], FONT_W, FONT_H);
+  FONT[ch]    = renderSprite(b, PALETTE.score);
+  FONT_HI[ch] = renderSprite(b, PALETTE.scoreHi);
+}
+
+// The `if (g)` guard is load-bearing: an unmapped character must render blank
+// rather than throw inside the draw loop. A space has no glyph and simply
+// advances by the pitch.
+function drawText(str, gx, gy, font) {
+  for (let i = 0; i < str.length; i++) {
+    const g = font[str[i]];
+    if (g) blit(g, gx + i * FONT_PITCH, gy);
+  }
+}
+
+function blit(spr, gx, gy) {   // game coords → screen
+  ctx.drawImage(spr, Math.round(gx * SCALE), Math.round(gy * SCALE));
+}
+
+// Axis-aligned fill in game coords. Rounds like blit() so decorative rects
+// land on the same pixel grid as sprites.
+function rect(gx, gy, gw, gh, col) {
+  if (col) ctx.fillStyle = col;
+  ctx.fillRect(Math.round(gx) * SCALE, Math.round(gy) * SCALE, gw * SCALE, gh * SCALE);
+}
+
+// ── Ground strip ──────────────────────────────────────────────────────
+// Private xorshift, seeded with a literal. Used ONLY here, at module init.
+// It must never be replaced with Math.random(): gapFor/pickType/spawnObstacle
+// draw from the global stream, so adding or removing a consumer there would
+// reshuffle every future obstacle sequence.
+function mkRand(seed) {
+  let s = seed >>> 0;
+  return function () {
+    s ^= s << 13; s >>>= 0;
+    s ^= s >>> 17;
+    s ^= s << 5;  s >>>= 0;
+    return s / 4294967296;
+  };
+}
+
+const GROUND_STRIP_W = 2400;   // visible repeat: once per ~3.1s at top speed
+const GROUND_STRIP_H = 10;     // GROUND_LINE + 10 === H === 150; do not enlarge
+
+const GROUND_STRIP = (function () {
+  const oc = document.createElement('canvas');
+  oc.width  = GROUND_STRIP_W * SCALE;
+  oc.height = GROUND_STRIP_H * SCALE;
+  const g = oc.getContext('2d');
+  g.imageSmoothingEnabled = false;
+  g.fillStyle = BODY_COL;
+  const px = (x, y, w, h) => g.fillRect(x * SCALE, y * SCALE, w * SCALE, h * SCALE);
+
+  px(0, 0, GROUND_STRIP_W, 1);          // the ground line itself (row 0 = y140)
+
+  // Motifs sit on rows 4 and 6 — exactly where the old bumps sat, so the
+  // ground band does not visually move.
+  const r = mkRand(0x1D0D0);
+  let x = 0;
+  while (x < GROUND_STRIP_W - 24) {
+    const k = r();
+    if (k < 0.40)      px(x, 4, 3 + ((r() * 6) | 0), 1);          // dash
+    else if (k < 0.65) px(x, 6, 2, 1);                            // pebble
+    else if (k < 0.85) { px(x, 4, 2, 1); px(x + 5, 6, 2, 1); }    // speckle pair
+    else               { px(x, 4, 2, 2); }                        // tuft
+    x += 6 + ((r() * 22) | 0);
+  }
+  return oc;
+})();
+
+// ── Game state ───────────────────────────────────────────────────────
+let dinoY        = TREX_GROUND_Y;
+let jumpVelocity = 0;
+let jumping      = false;
+let ducking      = false;
+let speedDrop    = false;
+let crashed      = false;
+let started      = false;
+let distanceRan  = 0;        // displayed-score units (×0.025 like original meter)
+let rawDistance  = 0;        // original distanceRan units (speed/frame)
+let currentSpeed = INITIAL_SPEED;
+let highScore    = 0;
+let runningTime  = 0;        // ms since episode start (CLEAR_TIME gate)
+let obstacles    = [];       // {type, x, y, w, h, gap, group, speedOffset}
+let obstacleHistory = [];    // last spawned type names (duplication rule)
+let obstacleCount = 0;
+let clouds       = [{x: 200, y: 30}, {x: 480, y: 50}];
+let obstaclesCleared = 0;    // authoritative clear counter (RL reward source)
+let deathCause   = null;     // what killed the dino (RL diagnostics)
+let groundOffset = 0;
+let legFrame     = 0;
+let wingFrame    = 0;
+let lastTime     = null;
+let animId       = null;
+
+// ── TRex interface (driven by chrome_driver.py JS injection) ────────
+const tRex = {
+  get yPos()        { return dinoY; },
+  get jumping()     { return jumping; },
+  get ducking()     { return ducking; },
+  get jumpVelocity(){ return jumpVelocity; },
+  startJump(speed) {
+    if (!jumping && !crashed) {
+      jumping      = true;
+      ducking      = false;
+      speedDrop    = false;
+      jumpVelocity = INITIAL_JUMP_VELOCITY - (speed || currentSpeed) / 10;
+    }
+  },
+  setDuck(v) {
+    if (crashed) return;
+    if (v) {
+      if (jumping) {
+        speedDrop = true;          // original: duck mid-air = fast fall
+      } else {
+        ducking = true;
+      }
+    } else {
+      ducking   = false;
+      speedDrop = false;
+    }
+  },
+};
+
+// ── Runner interface ─────────────────────────────────────────────────
+const runner = {
+  get crashed()      { return crashed; },
+  get distanceRan()  { return distanceRan; },
+  get currentSpeed() { return currentSpeed; },
+  get obstaclesCleared() { return obstaclesCleared; },
+  get deathCause()   { return deathCause; },
+  get runningTime()  { return runningTime; },   // ms; for timing-jitter measurement
+  get groundYPos()   { return TREX_GROUND_Y; },
+  get tRex()         { return tRex; },
+  get started()      { return started; },
+  set started(v)     { started = !!v; },
+  get activated()    { return started; },
+  set activated(v)   { started = !!v; },
+
+  get horizon() {
+    return {
+      obstacles: obstacles.map(ob => ({
+        xPos:  ob.x,
+        yPos:  ob.y,
+        width: ob.w,
+        typeConfig: { height: ob.h, type: ob.type },
+      })),
+    };
+  },
+
+  restart() {
+    crashed      = false;
+    distanceRan  = 0;
+    rawDistance  = 0;
+    currentSpeed = INITIAL_SPEED;
+    dinoY        = TREX_GROUND_Y;
+    jumpVelocity = 0;
+    jumping      = false;
+    ducking      = false;
+    speedDrop    = false;
+    runningTime  = 0;
+    obstacles    = [];
+    obstacleHistory = [];
+    obstacleCount   = 0;
+    obstaclesCleared = 0;
+    deathCause   = null;
+    groundOffset = 0;
+    started      = true;
+    lastTime     = null;
+    if (!animId) animId = requestAnimationFrame(loop);
+  },
+};
+
+window.Runner = { instance_: runner };
+
+// ── Keyboard (human play / demos) ────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'ArrowUp') {
+    e.preventDefault();
+    if (crashed) runner.restart();
+    else { started = true; tRex.startJump(currentSpeed); }
+  } else if (e.code === 'ArrowDown') {
+    e.preventDefault();
+    tRex.setDuck(true);
+  }
+});
+document.addEventListener('keyup', e => {
+  if (e.code === 'ArrowDown') tRex.setDuck(false);
+});
+
+// ── Obstacle spawning (original gap math) ────────────────────────────
+function gapFor(typeCfg, width, speed) {
+  const minGap = Math.round(width * speed + typeCfg.minGap * GAP_COEFFICIENT);
+  const maxGap = Math.round(minGap * MAX_GAP_COEFFICIENT);
+  return minGap + Math.floor(Math.random() * (maxGap - minGap));
+}
+
+function pickType() {
+  const names = ['CACTUS_SMALL', 'CACTUS_LARGE'];
+  if (ALLOW_BIRDS && currentSpeed >= OB_TYPES.PTERODACTYL.minSpeed) {
+    names.push('PTERODACTYL');
+  }
+  // Original duplication rule: max 2 identical in a row
+  let name, tries = 0;
+  do {
+    name = names[Math.floor(Math.random() * names.length)];
+    tries++;
+  } while (tries < 5 &&
+           obstacleHistory.length >= MAX_OBSTACLE_DUPLICATION &&
+           obstacleHistory.slice(-MAX_OBSTACLE_DUPLICATION).every(n => n === name));
+  return name;
+}
+
+function spawnObstacle() {
+  const name = pickType();
+  const cfg  = OB_TYPES[name];
+  obstacleCount++;
+
+  if (name === 'PTERODACTYL') {
+    const y = cfg.yPositions[Math.floor(Math.random() * cfg.yPositions.length)];
+    obstacles.push({
+      type: name, x: W, y, w: cfg.w, h: cfg.h,
+      gap: gapFor(cfg, cfg.w, currentSpeed),
+      speedOffset: Math.random() > 0.5 ? cfg.speedOffset : -cfg.speedOffset,
+      group: 1,
+    });
+  } else {
+    // Group size: original allows multiples once speed > multipleSpeed
+    let group = 1;
+    if (currentSpeed > cfg.multipleSpeed) {
+      group = 1 + Math.floor(Math.random() * MAX_OBSTACLE_LENGTH);
+    }
+    const w = cfg.w * group;
+    obstacles.push({
+      type: name, x: W, y: cfg.yPos, w, h: cfg.h,
+      gap: gapFor(cfg, w, currentSpeed),
+      speedOffset: 0,
+      group,
+    });
+  }
+  obstacleHistory.push(name);
+  if (obstacleHistory.length > 4) obstacleHistory.shift();
+}
+
+// ── Collision (effective boxes tuned to reproduce original behavior) ─
+//   low bird (y=100): hits both standing & ducking → must jump
+//   mid bird (y=75):  hits standing, clears ducking → must duck
+//   high bird (y=50): clears standing → run under
+function checkCollision() {
+  let dx, dy, dw, dh;
+  if (ducking) {
+    dx = TREX.X + 2;  dy = GROUND_LINE - TREX.H_DUCK;
+    dw = TREX.W_DUCK - 8;  dh = TREX.H_DUCK;
+  } else {
+    dx = TREX.X + 6;  dy = dinoY + 2;
+    dw = TREX.W - 14;  dh = TREX.H - 4;
+  }
+
+  for (const ob of obstacles) {
+    let ox, oy, ow, oh;
+    if (ob.type === 'PTERODACTYL') {
+      ox = ob.x + 12; oy = ob.y + 10;
+      ow = ob.w - 24; oh = ob.h - 18;
+    } else {
+      ox = ob.x + 2;  oy = ob.y + 2;
+      ow = ob.w - 4;  oh = ob.h - 2;
+    }
+    if (dx < ox + ow && dx + dw > ox && dy < oy + oh && dy + dh > oy) {
+      if (ob.type === 'PTERODACTYL') {
+        const label = {100: 'low', 75: 'mid', 50: 'high'}[ob.y] || '?';
+        return 'bird_' + label;
+      }
+      return ob.type.toLowerCase();
+    }
+  }
+  return null;
+}
+
+// ── Update (dt-based, original frame normalisation) ─────────────────
+function update(dt) {
+  if (crashed || !started) return;
+
+  const fe = dt / MS_PER_FRAME;      // framesElapsed — original normalisation
+  runningTime += dt;
+
+  // Jump physics (original updateJump)
+  if (jumping) {
+    const mult = speedDrop ? SPEED_DROP_COEFFICIENT : 1;
+    dinoY        += jumpVelocity * mult * fe;
+    jumpVelocity += GRAVITY * fe;
+    // Cap ascent once max height reached (original endJump behavior)
+    if (dinoY < MAX_JUMP_Y && jumpVelocity < DROP_VELOCITY) {
+      jumpVelocity = DROP_VELOCITY;
+    }
+    if (dinoY >= TREX_GROUND_Y) {
+      dinoY        = TREX_GROUND_Y;
+      jumpVelocity = 0;
+      jumping      = false;
+      speedDrop    = false;
+    }
+  }
+
+  // Obstacles move at game speed (+ bird offset); count clears on pass
+  for (const ob of obstacles) {
+    ob.x -= (currentSpeed + (ob.speedOffset || 0)) * fe;
+    if (!ob.counted && ob.x + ob.w < TREX.X) {
+      ob.counted = true;
+      obstaclesCleared++;
+    }
+  }
+  obstacles = obstacles.filter(ob => ob.x + ob.w > -10);
+
+  // Spawn: original horizon logic — first obstacle after CLEAR_TIME,
+  // then each next when the gap behind the last one has scrolled in.
+  if (runningTime > CLEAR_TIME) {
+    if (obstacles.length === 0) {
+      spawnObstacle();
+    } else {
+      const last = obstacles[obstacles.length - 1];
+      if (W - (last.x + last.w) > last.gap) spawnObstacle();
+    }
+  }
+
+  // Distance & speed (original: distance += speed·fe, accel per frame)
+  rawDistance += currentSpeed * fe;
+  distanceRan  = rawDistance * 0.025;          // displayed-score units
+  if (currentSpeed < MAX_SPEED) {
+    currentSpeed = Math.min(MAX_SPEED, currentSpeed + ACCELERATION * fe);
+  }
+
+  groundOffset = (groundOffset + currentSpeed * fe) % 60;
+  legFrame  = (legFrame  + fe / 6) % 1;     // original run anim ~12fps
+  wingFrame = (wingFrame + fe / 12) % 1;    // bird flap slower
+
+  // Clouds drift at fraction of speed
+  for (const cl of clouds) {
+    cl.x -= currentSpeed * 0.2 * fe;
+    if (cl.x < -50) { cl.x = W + 30; cl.y = 20 + Math.random() * 40; }
+  }
+
+  const cause = checkCollision();
+  if (cause !== null) {
+    crashed = true;
+    deathCause = cause;
+    if (distanceRan > highScore) highScore = distanceRan;
+  }
+}
+
+// ── Draw ─────────────────────────────────────────────────────────────
+// Scroll phase is a PURE FUNCTION of rawDistance, never an accumulator, so it
+// cannot drift with frame rate. rawDistance advances at groundOffset's rate and
+// restart() already
+// zeroes it, so the ground snaps back every episode with nothing added to the
+// reset list.
+//
+// NOTE: groundOffset (update() line ~685, restart() reset list) is deliberately
+// left in place though the renderer no longer reads it. Removing it would mean
+// editing update() and runner.restart(), both of which are RL-driver contract.
+function drawGround() {
+  const ph = Math.round(rawDistance % GROUND_STRIP_W);
+  const y  = GROUND_LINE * SCALE;
+  ctx.drawImage(GROUND_STRIP, -ph * SCALE, y);
+  if (ph > GROUND_STRIP_W - W) {
+    ctx.drawImage(GROUND_STRIP, (GROUND_STRIP_W - ph) * SCALE, y);
+  }
+}
+
+// ── Contact layer (draw-owned state only) ────────────────────────────
+// These three scalars live here, not in the game-state block, because they are
+// rendering state: advanced in draw(), never in update(), never read back into
+// the simulation. They are fixed scalars — no array that could grow across the
+// thousands of episodes the driver runs in one JS context.
+let fxPrevJump = false;
+let fxDustAt   = -1e9;
+let fxLastRaw  = 0;
+
+function drawContact() {
+  // Episode restart detected in the draw layer rather than by hooking
+  // runner.restart(), which is the interface your driver depends on.
+  if (rawDistance < fxLastRaw) { fxDustAt = -1e9; fxPrevJump = false; }
+  fxLastRaw = rawDistance;
+
+  // Landing edge — needs no hook in update().
+  if (!crashed && fxPrevJump && !jumping) fxDustAt = rawDistance;
+  fxPrevJump = jumping;
+
+  // Shadow narrows with altitude. Reads dinoY, writes nothing.
+  if (jumping && !crashed) {
+    const h = TREX_GROUND_Y - dinoY;
+    const w = Math.max(10, 26 - Math.min(16, h * 0.28));
+    rect(TREX.X + 6 + (26 - w) / 2, GROUND_LINE + 2, w, 1, PALETTE.shadow);
+  }
+
+  // Dust ages in DISTANCE, and is drawn at (landing spot - age), which pins it
+  // to the world and scrolls it left at exactly ground speed for free.
+  const age = rawDistance - fxDustAt;
+  if (age >= 0 && age < 26) {
+    const col = PALETTE.dust[age < 9 ? 0 : age < 18 ? 1 : 2];
+    const x   = TREX.X + 6 - age;
+    rect(x,     GROUND_LINE - 1, 2, 1, col);
+    rect(x + 5, GROUND_LINE - 3, 2, 1, col);
+    rect(x - 4, GROUND_LINE - 2, 1, 1, col);
+  }
+}
+
+// distanceRan and its 0.025 coefficient are the API score the driver reads —
+// format them here, never redefine them.
+function drawScore() {
+  const cur = String(Math.floor(distanceRan)).padStart(5, '0');
+  const gx  = W - 10 - 5 * FONT_PITCH + 1;   // right edge at x = W - 10
+  drawText(cur, gx, 5, FONT);
+
+  // Only once there is a score worth showing — "HI 00000" is noise.
+  if (Math.floor(highScore) > 0) {
+    const hiStr = 'HI ' + String(Math.floor(highScore)).padStart(5, '0');
+    drawText(hiStr, gx - 8 - hiStr.length * FONT_PITCH, 5, FONT_HI);
+  }
+}
+
+function drawDino() {
+  if (ducking && !jumping) {
+    blit(SPR.duck, TREX.X, GROUND_LINE - TREX.H_DUCK);
+    return;
+  }
+  blit(SPR.body, TREX.X, dinoY);
+  const legs = jumping ? SPR.legsStand
+             : (legFrame < 0.5 ? SPR.legsA : SPR.legsB);
+  blit(legs, TREX.X, dinoY + LEG_OFFSET_Y);
+}
+
+function drawObstacle(ob) {
+  if (ob.type === 'PTERODACTYL') {
+    blit(wingFrame < 0.5 ? SPR.birdUp : SPR.birdDown, ob.x, ob.y);
+  } else {
+    const spr = ob.type === 'CACTUS_SMALL' ? SPR.cactusS : SPR.cactusL;
+    const unit = OB_TYPES[ob.type].w;
+    for (let i = 0; i < ob.group; i++) {
+      blit(spr, ob.x + i * unit, ob.y);
+    }
+  }
+}
+
+function draw() {
+  ctx.fillStyle = BG_COL;
+  ctx.fillRect(0, 0, W * SCALE, H * SCALE);
+
+  for (const cl of clouds) blit(SPR.cloud, cl.x, cl.y);
+  drawGround();
+  drawContact();
+  for (const ob of obstacles) drawObstacle(ob);
+  drawDino();
+  drawScore();
+
+  // y=42 matches the original's Math.round((canvasHeight - 25) / 3).
+  if (crashed) {
+    drawText('GAME OVER', Math.round((W - 9 * FONT_PITCH) / 2), 42, FONT);
+  }
+}
+
+// ── Main loop ────────────────────────────────────────────────────────
+// Variable timestep, driven by requestAnimationFrame. Physics is normalised by
+// framesElapsed (fe = dt / MS_PER_FRAME), so the game runs at the same PACE on
+// any display — but not with the same per-frame granularity. On a fast display
+// the jump arc is integrated in smaller sub-steps than on a 60Hz one. That is
+// real, it is measurable, and it is yours to deal with.
+function loop(ts) {
+  const dt = lastTime !== null ? Math.min(ts - lastTime, 100) : MS_PER_FRAME;
+  lastTime = ts;
+  update(dt);
+  draw();
+  animId = requestAnimationFrame(loop);
+}
+
+// Auto-start: the RL trainer drives the game via JS injection.
+started = true;
+animId  = requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
