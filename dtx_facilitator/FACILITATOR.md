@@ -170,6 +170,23 @@ is a win — celebrate it and give them the payload early.
 
 ---
 
+## Follow-on segment — making it industrial
+
+`factory_segment/` is a separate ~30 minute block for after the dino session,
+answering "that was a game, what does it have to do with my job?"
+
+It runs the same three-agent comparison against a five-step production line with
+a capital budget. The finding is more useful than a win for the neural network:
+at full budget all three agents tie, and greedy ROI — which you can explain to a
+plant manager in one sentence — captures essentially all the value. Tighten the
+budget until the constraint binds and greedy falls $50K/period behind, but the
+thing that beats it is *search*, not *learning*, and the DQN never beats random
+search at any budget while carrying run-to-run variance the others do not.
+
+That is a better lesson for a GE audience than "use RL", and it closes the loop
+on the morning: it is still a simulator, and they have already felt what that
+costs.
+
 ## Prize
 
 Highest median on the Round 2 benchmark. Say the median rule out loud early —
