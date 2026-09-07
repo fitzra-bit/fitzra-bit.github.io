@@ -13,6 +13,12 @@ python app.py                        # opens http://localhost:8000
 ```
 
 Model is configurable via `OPTIFLOW_MODEL` (default `claude-sonnet-4-6`).
+The plant model is configurable via `OPTIFLOW_PLANT`, so you can point at a
+different facility without editing the shipped file:
+
+```bash
+OPTIFLOW_PLANT=/path/to/my_plant.yaml python app.py
+```
 
 ## The core idea: separate "what is" from "what if"
 

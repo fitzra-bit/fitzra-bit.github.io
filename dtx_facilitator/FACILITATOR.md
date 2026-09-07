@@ -187,6 +187,21 @@ That is a better lesson for a GE audience than "use RL", and it closes the loop
 on the morning: it is still a simulator, and they have already felt what that
 costs.
 
+## Follow-on segment — making it usable
+
+`optiflow_segment/` is a ~20 minute block after the factory segment. It answers
+the question the factory segment leaves hanging: a ranked list of ten purchases
+is not something a plant manager can act on or argue with.
+
+The two teachable ideas are the LLM/tool split — the model chooses which
+simulator call to make, the simulator does every calculation, so each number
+traces to a run rather than to a model's recollection — and separating the plant
+model (what is) from scenarios (what if), which is what keeps the conversation
+auditable.
+
+It needs an ANTHROPIC_API_KEY and live network access, so confirm it works from
+the GE network before the day, and screenshot the first few steps as a fallback.
+
 ## Prize
 
 Highest median on the Round 2 benchmark. Say the median rule out loud early —

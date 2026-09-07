@@ -1,5 +1,6 @@
 """Load a ProductionLine from the plant model YAML + scenario change overrides."""
 
+import os
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "factory_sim"))
@@ -10,7 +11,11 @@ from simulation.upgrade import UpgradeOption
 from simulation.step import ProcessStep
 from simulation.line import ProductionLine
 
-PLANT_FILE = Path(__file__).parent / "default_plant.yaml"
+# Point at a different plant model without editing files:
+#   OPTIFLOW_PLANT=/path/to/other_plant.yaml python app.py
+# Matches the existing OPTIFLOW_MODEL convention.
+PLANT_FILE = Path(os.environ.get("OPTIFLOW_PLANT")
+                  or Path(__file__).parent / "default_plant.yaml")
 
 
 def load_plant_data() -> dict:
