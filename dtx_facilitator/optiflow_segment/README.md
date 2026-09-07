@@ -127,6 +127,64 @@ with the decision needs to be able to argue with it.
 
 ---
 
+## The deck — `OptiFlow_DTX.pptx`
+
+De-branded copy of the original 18-slide deck. Changes were confined to slides
+1, 6, 10 and 12:
+
+| Was | Now |
+|---|---|
+| "P&G AI Technical Interview" byline | "GE Digital Technology Experience" |
+| Line A — Liquid Detergent · Supplier: Rosler | Line A — Component Machining · Machine tool vendor |
+| Line B — Personal Care · Supplier: Haas / ATC | Line B — Subassembly · Automation vendor |
+| "Haas Q1 Discount", "Haas offering 18% discount" | "Supplier Q1 Discount", "Machine tool vendor offering…" |
+| Memphis Line 2 | Plant 2, Line 2 |
+
+Verified afterwards that none of P&G, Procter, Interview, Detergent, Personal
+Care, Rosler, Haas, ATC or Memphis appears in any slide text. Document metadata
+was already clean (authored by PptxGenJS) and no speaker notes carried branding.
+The file opens cleanly and all 18 slides are intact.
+
+### Read this before you present it
+
+**The deck describes a more capable system than the repository contains.** That
+was fine for an interview, where a deck can carry a design proposal. It is a
+problem here, because DTX participants will have the code in front of them.
+
+| The deck says | The code does |
+|---|---|
+| "Built on SimPy — Python discrete event simulation" | No SimPy anywhere. Plain arithmetic. |
+| OEE: Availability × Performance × Quality | No OEE. `capacity` and `yield_rate` only. |
+| "Stochastic demand with configurable…" | Nothing stochastic. One deterministic evaluation. |
+| "N=500 trials, variance below 0.5%" | There are no trials to run. |
+| "Cascading bottlenecks across parallel lines" | A single serial line; `bottleneck = min(capacity)`. |
+| Supplier lead times driving sequencing | No lead-time field in the model. |
+| "N=500 trials: ~1.2s on M2 Pro" | Not applicable. |
+
+I checked by searching for each term across `factory_sim/` and `factory_chat/`:
+zero hits for simpy, OEE, availability, demand, stochastic and lead_time.
+
+This matters more than usual for this session specifically, because the whole
+dino arc is about measurement discipline and not fooling yourself with a metric.
+Presenting capability claims the visible code does not support undercuts the
+thing you spent the morning teaching, and a sharp new hire may well notice.
+
+Three honest ways to handle it, in order of effort:
+
+1. **Relabel the deck as a design proposal.** Add a line to slide 1 —
+   "architecture proposal; the working prototype implements the deterministic
+   core" — and say it once out loud. Cheapest, and it turns the gap into a
+   useful point about the distance between a design and a shipped increment.
+2. **Cut or annotate the over-claiming slides.** Slides 5, 6, 11, 15 and 18
+   carry most of it. A shorter deck that matches the code needs no caveats.
+3. **Build the missing pieces.** Real work, and not before this session.
+
+My recommendation is (1) — the gap between "what we designed" and "what we
+built so far" is itself a good thing for new hires to see named openly, and it
+costs you one sentence.
+
+---
+
 ## Practical notes
 
 **API key.** `ANTHROPIC_API_KEY` must be set, or the app exits with a clear
