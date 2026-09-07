@@ -1,5 +1,18 @@
 # Genetic champion — 2026-06-12 (SUPERSEDED — fixed-cap artifact)
 
+> ### ⚠ Not runnable against the current env
+>
+> This checkpoint takes **15 inputs**; `game/dino_env.py` now emits
+> `N_FEATURES = 28`, and **nothing truncates for genetic genomes** —
+> `agents/neural_net.py` does a bare `h @ W`, so this fails at the first matmul.
+> The DQN-only tools that *do* truncate (`gate_battery.py`, `clean_realtime.py`)
+> build a `QNetwork` and cannot load an `.npz` genome. Era: pre-v2 (v2 widened the observation 15 → 26).
+>
+> This checkpoint is therefore not runnable by any tool in the repo, and its
+> scores cannot be reproduced without a tree from its own era. Note also that
+> `--agent genetic` training is itself currently broken against the 28-feature
+> env — see "Known break" in `../../README.md`.
+
 > **This run is superseded by `models/genetic_validated_20260612_fixed/`.**
 > The fitness cap was fixed at 2 game-minutes; once the population could
 > survive the full window, selection saturated and evolution random-walked.
@@ -39,5 +52,6 @@ ignore high) without human help.
 ```bash
 cd dino_rl
 python -m http.server 8766 &
-python main.py --demo --load models/genetic_validated_20260612/best_genome.npz
+# NOT RUNNABLE (see banner above)
+# python main.py --demo --load models/genetic_validated_20260612/best_genome.npz
 ```

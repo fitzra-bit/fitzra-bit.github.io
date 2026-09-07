@@ -413,7 +413,10 @@ class DinoEnv:
                 return ob.type.lower()
         return None
 
-    # ── Observation (15 features) ─────────────────────────────────────
+    # ── Observation (N_FEATURES = 28) ─────────────────────────────────
+    # Indices 0-14 below are the v1 base; v2 appends 5 + 6 one-hots and E11
+    # appends the 2 closing-velocity residuals. Widening this vector breaks
+    # every saved checkpoint — see the compatibility table in README.md.
     #  0 obs1 dist (x/600, 1=far/none)     8 gap obs1→obs2 (norm, 1=none)
     #  1 obs1 top-edge y (/150)            9 speed, (speed-6)/7 → [0,1]
     #  2 obs1 width (/600)                10 dino y-offset from ground (/150)

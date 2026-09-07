@@ -10,23 +10,66 @@ curriculum that advances, recovers from stalls, and checkpoints automatically.
 
 > Full design rationale and operating procedure: **[OVERHAUL.md](OVERHAUL.md)**
 
-## Quick start — the only two commands you need
+## Quick start
+
+Training and validation are two halves of one loop. **The sim buys throughput;
+the real-time visible browser is the metric of record.** A checkpoint is not
+worth anything until it survives the browser — that is why the promoted
+directories are named `validated_*`.
+
+### 1. Train — in the sim
 
 ```bash
 cd dino_rl
 python main.py --agent dqn --episodes 100000   # start curriculum training
+python main.py --agent dqn --auto              # resume after ANY stop, nothing lost
 ```
 
-No Chrome needed for training. After **any** stop — crash, Ctrl+C, reboot:
+No Chrome and no game server needed for this half. Watch progress at
+**http://localhost:8765**. **Eval Avg** (greedy eval on fixed seeds) drives
+phase gates and stall detection; **Deploy GATE %** — P(reach the windup gate,
+score ≥2,500) — drives `best_model` selection (gate-lex). Median alone was
+retired: it saturates at the frame cap and froze selection.
+
+### 2. Validate — in the real-time visible browser
+
+Everything in this half loads `http://localhost:8766/game/dino.html`
+(`config.py: game_url`), so it needs the game served. Run this from `dino_rl/`
+in its own shell and leave it up:
 
 ```bash
-python main.py --agent dqn --auto   # resumes mid-phase, nothing lost
+python -m http.server 8766
 ```
 
-Watch progress at **http://localhost:8765**. **Eval Avg** (greedy eval on fixed
-seeds) drives phase gates and stall detection; **Deploy GATE %** — P(reach the
-windup gate, score ≥2,500) — drives `best_model` selection (gate-lex). Median
-alone was retired: it saturates at the frame cap and froze selection.
+Then, cheap primary metric first — P(pass the windup gate) from the canonical
+speed-6 start, ~30–40 min for 20 visible episodes:
+
+```bash
+python gate_battery.py --load runs/<run>/best_model.pt --episodes 20
+```
+
+Then the champion-crowning instrument — the deployment loop with no per-step
+instrumentation, because that observer effect corrupted the earlier
+measurements:
+
+```bash
+python clean_realtime.py --load runs/<run>/best_model.pt --episodes 10
+```
+
+`gate_battery.py` runs the *same protocol* in the sim (`--sim`) or the browser
+(default) precisely so the fidelity gap can be measured rather than assumed —
+only trust its sim mode for ranking once sim-vs-visible fidelity is validated at
+the gate.
+
+> **Running the commands.** These assume `python` resolves to the interpreter
+> that has this project's dependencies. If you installed into a venv, invoke it
+> explicitly — on Windows PowerShell a bare `python` may hit the Microsoft Store
+> alias stub instead:
+> ```
+> .\.venv\Scripts\python.exe -m http.server 8766
+> .\.venv\Scripts\python.exe main.py --agent dqn --auto
+> ```
+> All commands and all `--load` paths are relative to `dino_rl/`, not the repo root.
 
 ## Current champion & deployment timing (2026-07-18)
 
@@ -45,13 +88,17 @@ at top speed; 20ms is both faster AND cleaner, and it roughly doubled the
 recipe's endurance). Poll rate is part of the agent, not the game.
 
 ```bash
+# Serve the game first, from dino_rl/, in a second shell:
+#   python -m http.server 8766
+
 # Watch the champion (28-feat, 20ms clock — --poll 0.02 REQUIRED: it reads its
 # decision cadence and collapses on the 50ms default)
 python main.py --demo --load models/validated_pollrate_20260710/best_model.pt --poll 0.02
-
-# The E8 reference artifact (26-feat, 50ms clock)
-python main.py --demo --load models/validated_capacity_20260707/best_model.pt
 ```
+
+The E8 reference artifact (`validated_capacity_20260707`, 26-feat) can no longer
+be demoed — E11 widened the observation to 28 and it will not load. See
+[Saved checkpoints](#saved-checkpoints--what-still-runs).
 
 Score comparisons are only valid at a MATCHED step cap and, ideally,
 interleaved in one session (EXPERIMENTS.md amendments 7–8; a cap-mismatched
@@ -98,6 +145,39 @@ dino.html?maxspeed=9&accel=0.0005 # gentler pacing (custom phases)
 ```
 
 Playable by hand too: space/↑ = jump, ↓ = duck.
+
+### Rendering (visual only — physics untouched)
+
+The renderer had drifted from the simulation it draws. The T-Rex's three leg
+sprites were allocated 14 rows and drawn in only 5–7 of them, so the dino ran
+7–9 px **above** the ground line every cactus sits flush on; the ducking sprite
+stopped 10 px short of its own hitbox; and the two pterodactyl frames shared no
+pixels, so the bird strobed vertically instead of flapping. A visual pass fixed
+those and tidied the draw layer:
+
+- every sprite now bottoms out on y139, one pixel above the ground bar
+- `bmp()` takes a declared `(w, h)` and warns on mismatch — it never throws,
+  because it runs upstream of `window.Runner` and a throw would silently
+  zero every episode
+- ground is one 2400 px pre-built strip (2 `drawImage`) instead of 33 `fillRect`
+  per frame, and its scroll phase is a pure function of `rawDistance`, never an
+  accumulator — `draw()` runs once per `stepFrames(n)` batch, so an accumulator
+  would drift with the agent's `action_repeat`
+- the HUD is a 10×13 bitmap font, removing the last `ctx.fillText` (and the last
+  canvas text state) from the draw path
+- a landing dust puff and a jump shadow, both draw-owned state only
+
+**Nothing about gameplay changed.** The agents read numeric state through
+`Runner.instance_`, never pixels, and the physics constants, `update()`,
+`checkCollision()`, the spawner, the `tRex`/`runner` interfaces, `stepFrames()`
+and the lockstep loop are all byte-identical. This was verified two ways: a
+region-by-region diff of every simulation function, and a 636-scenario lockstep
+replay (5 speeds × 2 obstacle types × 3 group sizes × 21 jump-takeoff frames,
+plus duck sweeps — 481 crashes and 155 clears) whose full state traces match the
+pre-change build exactly. The PRNG stream is also untouched: the cloud recycler
+draws from the *same* global `Math.random()` stream as the obstacle spawner, so
+adding or removing even one cloud would reshuffle every future obstacle
+sequence — the decorative ground strip therefore uses its own seeded xorshift.
 
 ## The curriculum (`curriculum.py`)
 
@@ -153,20 +233,66 @@ through the curriculum far faster in wall-clock and in a tiny genome.
 > the champion maxes out the window. See
 > `models/genetic_validated_20260612_fixed/README.md` for the full before/after.
 
-Validated checkpoints live in `models/` (newest first):
+## Saved checkpoints — what still runs
 
-- `models/validated_capacity_20260707/` — **current champion** (E8, 26-feat `[26,256,128]`, 50ms clock; needs `--layers 26,256,128` in diagnostics)
-- `models/validated_pollrate_20260710/` — E12 candidate (28-feat `[28,256,128]`, 20ms clock; needs `--poll 0.02` + `--layers 28,256,128` everywhere; promotion retracted pending same-ceiling head-to-head)
-- `models/validated_timing_20260705/` — E5 champion (26-feat, first trained on the true timing model)
-- `models/validated_20260612/` — sim-era DQN (eval 11,087; browser transfer only under lockstep — see OVERHAUL.md correction)
-- `models/genetic_validated_20260612_fixed/` — GA champion (eval 11,087, adaptive cap)
-- `models/genetic_validated_20260612/` — first GA run (eval 3,413, **superseded** — fixed-cap artifact)
+`game/dino_env.py` sets `N_FEATURES = 28`. v2 took the observation 15 → 26; E11
+took it 26 → 28 (closing-velocity residuals). Because the vector is **append-only**,
+an older net can still be fed a valid observation by truncating to its width —
+but only the tools that actually do so:
+
+| Tool | Truncates? | Older checkpoints |
+|---|---|---|
+| `gate_battery.py`, `clean_realtime.py`, `bird_velocity_audit.py`, `bird_strategy.py` | yes — `obs[:n_in]` via `--layers` | **runnable** |
+| `main.py --demo` | **no** | fail to load |
+| genetic (`agents/neural_net.py`) | **no** | fail at the first matmul |
+
+| Checkpoint | Inputs | `--demo` | `gate_battery` / `clean_realtime` |
+|---|---|---|---|
+| `validated_pollrate_20260710` — **champion** (E12) | 28 | yes, `--poll 0.02` | yes |
+| `validated_capacity_20260707` (E8) | 26 | no | yes, `--layers 26,256,128` |
+| `validated_timing_20260705` (E5) | 26 | no | yes, `--layers 26,128,64` |
+| `validated_20260612` (sim-era DQN) | 15 | no | yes, `--layers 15,128,64` |
+| `validated_jitter_20260620` | 15 | no | yes, `--layers 15,128,64` |
+| `genetic_validated_20260612_fixed` (GA champion) | 15 | no | no — genetic `.npz` is not a `QNetwork` |
+| `genetic_validated_20260612` (superseded) | 15 | no | no — same |
+
+So: the E12 champion is the only checkpoint you can **demo**, but every older
+*DQN* checkpoint is still **measurable** on the real-time instruments with an
+explicit `--layers`. That is what keeps `EXPERIMENTS.md`'s baselines reproducible.
+The two genetic genomes are the genuine dead ends — nothing truncates for them.
+
+> **Caveat on truncation.** It hands an old net the first *n* features, which is
+> only sound because every widening appended. If a base feature's *meaning* ever
+> changes, truncation will silently feed wrong values rather than erroring.
+> Historic eval scores (11,087 for the sim-era DQN and the GA champion) were
+> measured against the env of their own era and are not directly comparable to
+> numbers produced today.
 
 ```bash
-# Watch either champion play the real browser game
-python main.py --demo --load models/validated_20260612/best_model.pt
-python main.py --demo --load models/genetic_validated_20260612_fixed/best_genome.npz
+# Serve the game first, from dino_rl/, in another shell:
+#   python -m http.server 8766
+
+# Demo (champion only)
+python main.py --demo --load models/validated_pollrate_20260710/best_model.pt --poll 0.02
+
+# Measure an older baseline — works, with an explicit --layers
+python gate_battery.py --load models/validated_capacity_20260707/best_model.pt \
+    --layers 26,256,128 --episodes 20
 ```
+
+`--poll 0.02` is not optional for the champion — it reads its own decision
+cadence as a feature, and at the 50ms default that input goes out of
+distribution and it collapses.
+
+### Known break: `--agent genetic`
+
+`GENETIC_CONFIG["network_layers"]` is still `[15, 16, 8, 3]` while `DinoEnv`
+emits 28 features, and `run_sim_episode()` passes the observation through
+untruncated. **`python main.py --agent genetic ...` crashes on the first
+forward pass.** The GA results recorded here were produced before v2; the
+agent has not been re-fitted to the current observation. Fixing it means
+choosing deliberately between widening the genome to 28 inputs (retrains from
+scratch) or truncating in `run_sim_episode` (keeps the old feature set).
 
 ## Run artifacts
 
@@ -185,11 +311,14 @@ runs/dqn_<timestamp>/
 
 ```bash
 python main.py --agent dqn --no-curriculum        # flat training, full game
-python main.py --demo --load runs/dqn_X/best_model.pt   # watch it play
-python main.py --agent genetic --generations 200 --population 30
-python main.py --agent genetic --workers 4        # parallel Chrome windows
+python main.py --demo --load runs/dqn_X/best_model.pt   # watch a fresh run play
 python main.py --headless                         # no visible browser
 python main.py --cleanup                          # kill orphaned Chrome
+
+# BROKEN — see "Known break: --agent genetic" above. Left documented rather than
+# deleted because the GA results in this README were produced with them.
+# python main.py --agent genetic --generations 200 --population 30
+# python main.py --agent genetic --workers 4      # parallel Chrome windows
 ```
 
 ## Architecture

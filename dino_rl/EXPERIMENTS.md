@@ -113,7 +113,19 @@ achieved, emerged from the corrected physics with zero strategy engineering.
 **Phase 3 (data arms) NOT NEEDED — gate solved by the timing model alone.
 Next: Phase 4 (residual bird deaths at speed 13, endurance past the 20k
 cap) + Phase 5 (repeatability certification, commit, docs).**
-Demo: `python main.py --demo --load runs/dqn_20260705_134404/best_model.pt`
+Demo: ~~`python main.py --demo --load runs/dqn_20260705_134404/best_model.pt`~~ —
+E11 widened the observation 26 → 28, and `main.py --demo` does not truncate, so
+this E5-era checkpoint no longer loads there. It is still **measurable**, because
+the real-time instruments do truncate:
+
+```bash
+python gate_battery.py --load <e5-checkpoint> --layers 26,128,64 --episodes 20
+```
+
+That is what keeps the baselines in this document reproducible. See the
+checkpoint-compatibility table in `README.md` for the per-model flags, and note
+the truncation caveat there: it is sound only because every widening appended
+features.
 
 **Phase 3 (conditional) — data-distribution arms on the E5 baseline.**
 E3 start-speed rebalance toward 6–7.5; E4 stratified/prioritized replay for

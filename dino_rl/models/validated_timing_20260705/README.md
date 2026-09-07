@@ -1,5 +1,24 @@
 # validated_timing_20260705 — champion trained on the TRUE deployment timing
 
+> ### ⚠ Not runnable against the current env
+>
+> This checkpoint takes **26 inputs**; `game/dino_env.py` now emits
+> `N_FEATURES = 28`, so `main.py --demo` cannot load it — that path does not
+> truncate. Era: pre-E11 (E11 widened the observation 26 → 28).
+>
+> **It is still measurable.** `gate_battery.py` and `clean_realtime.py` truncate
+> the observation to the net's width, so the numbers below remain reproducible:
+>
+> ```
+> python gate_battery.py --load models/validated_timing_20260705/best_model.pt \
+>     --layers 26,128,64 --episodes 20
+> ```
+>
+> Truncation is sound only because every widening appended features; it hands
+> this net the first 26 of 28. Scores here were measured against the env of
+> their own era and are not directly comparable to numbers produced today.
+> See the compatibility table in `../../README.md`.
+
 **E5 seed 1** (`runs/dqn_20260705_134404`), 26-feature DQN `[26,128,64]`.
 The first model trained on the deployment physics that actually exist on the
 target machine (145Hz display → fe≈0.414 sub-frame integration), with the
@@ -18,7 +37,7 @@ deaths (large cacti @ speed 7.1–7.7 — the June/July failure mode) absent fro
 all three. Emergent conditional bird strategy: jumps at comfortable spacing,
 fast-fall jump-aborts under high birds, full-ducks mid birds when tight.
 
-Demo:   `python main.py --demo --load models/validated_timing_20260705/best_model.pt`
+Demo:   ~~`python main.py --demo --load models/validated_timing_20260705/best_model.pt`~~ — not runnable, see banner
 Judge:  `python gate_battery.py --load ... --episodes 20` (visible) or
         `--sim --fe 0.4138 --cadence-file measurements/cadence_visible_20260705.npy
         --act-latency 0.25` (calibrated screen). Full history: `../EXPERIMENTS.md`.
