@@ -14,6 +14,11 @@ GENETIC_CONFIG = {
     "spam_rate_threshold": 0.50,
     "spam_penalty_max": 0.75,
     "crossover_type": "uniform",
+    # BROKEN against the current env: DinoEnv emits N_FEATURES = 28 and
+    # run_sim_episode() passes the observation through untruncated, so a
+    # 15-input genome fails at the first matmul. `--agent genetic` cannot run
+    # until this is either widened to 28 (retrains from scratch) or the
+    # observation is truncated in run_sim_episode. See README.md "Known break".
     "network_layers": [15, 16, 8, 3],
     "max_steps_per_episode": 20_000,
     "poll_interval": 0.05,
@@ -27,11 +32,13 @@ GENETIC_CONFIG = {
 # The browser game is the eval/demo surface (python main.py --demo).
 DQN_CONFIG = {
     # Network: dueling trunk (V/A heads appended internally)
-    # Input is 26 (15 base + 5 v2 + 6 explicit obstacle-class one-hots;
-    # see game/dino_env.py). Earlier checkpoints are incompatible.
-    "network_layers": [28, 256, 128],   # E11: 26 + 2 closing-velocity residuals;
-                                        # older nets: --net-layers / --layers 26,...
-                                        # (obs is truncated to the net's input dim)
+    # Input is 28 = 15 base + 5 v2 + 6 obstacle-class one-hots + 2 closing-velocity
+    # residuals (E11). Must match game/dino_env.py N_FEATURES.
+    "network_layers": [28, 256, 128],
+    # Older checkpoints: gate_battery.py / clean_realtime.py accept --layers and
+    # truncate the observation to the net's width (obs[:n_in]) — sound only
+    # because every widening APPENDED. main.py --demo does NOT truncate, so it
+    # cannot load them. See "Saved checkpoints" in README.md.
 
     # Optimisation
     "lr": 1e-4,

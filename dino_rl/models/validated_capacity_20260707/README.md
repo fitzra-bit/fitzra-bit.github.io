@@ -1,5 +1,24 @@
 # validated_capacity_20260707 — capacity champion (E8)
 
+> ### ⚠ Not runnable against the current env
+>
+> This checkpoint takes **26 inputs**; `game/dino_env.py` now emits
+> `N_FEATURES = 28`, so `main.py --demo` cannot load it — that path does not
+> truncate. Era: pre-E11 (E11 widened the observation 26 → 28).
+>
+> **It is still measurable.** `gate_battery.py` and `clean_realtime.py` truncate
+> the observation to the net's width, so the numbers below remain reproducible:
+>
+> ```
+> python gate_battery.py --load models/validated_capacity_20260707/best_model.pt \
+>     --layers 26,256,128 --episodes 20
+> ```
+>
+> Truncation is sound only because every widening appended features; it hands
+> this net the first 26 of 28. Scores here were measured against the env of
+> their own era and are not directly comparable to numbers produced today.
+> See the compatibility table in `../../README.md`.
+
 **E8** (`runs/dqn_20260706_190238`), 26-feature DQN **[26, 256, 128]** (~4×
 the control's parameters), trained on the E5 recipe (true timing model:
 fe 0.4138, empirical cadence clock, per-episode act-latency randomization,
@@ -30,6 +49,6 @@ oscillation makes banked-peak quality a lottery). See EXPERIMENTS.md Phase 5.
 
 Unprecedented curriculum: exited phase 4-birds AT the eval cap (11,088).
 
-Demo:  `python main.py --demo --load models/validated_capacity_20260707/best_model.pt`
+Demo:  ~~`python main.py --demo --load models/validated_capacity_20260707/best_model.pt`~~ — not runnable, see banner
        (diagnostics need `--layers 26,256,128`)
 Lineage: dethrones validated_timing_20260705 (E5 seed 1). Full record: `../EXPERIMENTS.md`.

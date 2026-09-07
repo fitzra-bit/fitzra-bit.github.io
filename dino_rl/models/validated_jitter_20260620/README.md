@@ -1,5 +1,24 @@
 # Validated jitter-robust run — 2026-06-20
 
+> ### ⚠ Not runnable against the current env
+>
+> This checkpoint takes **15 inputs**; `game/dino_env.py` now emits
+> `N_FEATURES = 28`, so `main.py --demo` cannot load it — that path does not
+> truncate. Era: pre-v2 (v2 widened the observation 15 → 26).
+>
+> **It is still measurable.** `gate_battery.py` and `clean_realtime.py` truncate
+> the observation to the net's width, so the numbers below remain reproducible:
+>
+> ```
+> python gate_battery.py --load models/validated_jitter_20260620/best_model.pt \
+>     --layers 15,128,64 --episodes 20
+> ```
+>
+> Truncation is sound only because every widening appended features; it hands
+> this net the first 15 of 28. Scores here were measured against the env of
+> their own era and are not directly comparable to numbers produced today.
+> See the compatibility table in `../../README.md`.
+
 The first model trained to play the **real-time browser game** (not just the
 sim). Trained with `--jitter --randstart`: timing domain-randomization plus
 random start speed. Completes the full 4-phase curriculum and, crucially,
@@ -50,9 +69,11 @@ phase in ~50 episodes and rode to the ceiling — confirming the bottleneck was
 cd dino_rl
 python -m http.server 8766 &
 # real-time, un-throttled — this is the meaningful test:
-python main.py --demo --load models/validated_jitter_20260620/best_model.pt
+# NOT RUNNABLE (see banner above)
+# python main.py --demo --load models/validated_jitter_20260620/best_model.pt
 # deterministic/lockstep (also perfect, but the agent controls the clock):
-python main.py --demo --lockstep --load models/validated_jitter_20260620/best_model.pt
+# NOT RUNNABLE (see banner above)
+# python main.py --demo --lockstep --load models/validated_jitter_20260620/best_model.pt
 ```
 
 Reproduce the training:

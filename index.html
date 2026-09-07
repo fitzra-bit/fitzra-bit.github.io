@@ -97,9 +97,13 @@
         and a genetic algorithm, both trained in a fast Python simulation that mirrors the
         browser game constant-for-constant, then validated playing the real thing.</p>
         <div class="result">
-          <b>Result:</b> both agents complete a 4-phase curriculum with zero human intervention
-          and reach the same near-perfect ceiling (eval&nbsp;11,087). The genetic version does it
-          in a 419-parameter genome. Training runs ~1000× faster than the browser
+          <b>Result:</b> both agents complete a 4-phase curriculum with zero human
+          intervention and reach the same near-perfect ceiling in <i>simulation</i>
+          (eval&nbsp;11,087) — the genetic one in a 419-parameter genome. But sim
+          eval is not the goal: the metric of record is score in the real-time
+          browser, where the current champion averages ~30,000. Closing that
+          sim-to-browser gap — it traced to display refresh rate, not the agent —
+          was most of the work. Training runs ~1000× faster than the browser
           (~35k&nbsp;steps/sec vs ~35).
         </div>
         <div class="links">

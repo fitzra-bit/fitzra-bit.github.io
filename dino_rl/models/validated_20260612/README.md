@@ -1,5 +1,24 @@
 # Validated run — 2026-06-12 (first full-curriculum completion)
 
+> ### ⚠ Not runnable against the current env
+>
+> This checkpoint takes **15 inputs**; `game/dino_env.py` now emits
+> `N_FEATURES = 28`, so `main.py --demo` cannot load it — that path does not
+> truncate. Era: pre-v2 (v2 widened the observation 15 → 26).
+>
+> **It is still measurable.** `gate_battery.py` and `clean_realtime.py` truncate
+> the observation to the net's width, so the numbers below remain reproducible:
+>
+> ```
+> python gate_battery.py --load models/validated_20260612/best_model.pt \
+>     --layers 15,128,64 --episodes 20
+> ```
+>
+> Truncation is sound only because every widening appended features; it hands
+> this net the first 15 of 28. Scores here were measured against the env of
+> their own era and are not directly comparable to numbers produced today.
+> See the compatibility table in `../../README.md`.
+
 The first run of the overhauled training system (sim training, sparse
 stationary rewards, env-shaped curriculum, greedy-eval gating). The full
 4-phase curriculum completed **autonomously in ~45 minutes wall-clock
@@ -41,7 +60,8 @@ dying entirely (high=run under, mid=duck, low=jump).
 ```bash
 cd dino_rl
 python -m http.server 8766 &
-python main.py --demo --load models/validated_20260612/best_model.pt
+# NOT RUNNABLE (see banner above)
+# python main.py --demo --load models/validated_20260612/best_model.pt
 ```
 
 Architecture: dueling Q-network, trunk [15, 128, 64] (see

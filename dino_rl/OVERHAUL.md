@@ -161,11 +161,19 @@ python main.py --agent dqn --auto
 Resumes the newest run mid-phase: weights, optimizer, ε, phase, episode
 counter, eval bests. CSV history continues in the same file.
 
-### Watch it play (real browser game)
+### Validate in the real browser game
 ```bash
-python -m http.server 8766 &        # serve the game (only needed for demo)
+python -m http.server 8766          # from dino_rl/, in its own shell
 python main.py --demo --load runs/dqn_<ts>/best_model.pt
 ```
+The game server is needed for **everything real-time**, not just `--demo`:
+`gate_battery.py` (default mode), `clean_realtime.py`, `ab_realtime.py`,
+`measure_cadence.py` and `measure_timing.py` all drive a visible Chrome against
+`http://localhost:8766/game/dino.html`. The sim is the throughput half; this is
+the metric of record.
+
+Checkpoints from `models/` older than E12 will not load — E11 widened the
+observation 26 → 28. See the compatibility table in `README.md`.
 
 ### Check progress without the dashboard
 ```bash
@@ -340,5 +348,9 @@ were updated to 15 inputs; a legacy browser-based GA (`--agent genetic
 --browser`) is kept for demonstration, but the sim-based GA is the default.
 
 **Feature-count lineage:** 15 (overhaul) → 20 (v2: dissolved + cadence) → 26
-(explicit bird-class one-hots). The current champion is 26-feature `[26,256,128]`;
-older checkpoints need their matching `--layers` (e.g. `20,128,64` for v2b).
+(explicit bird-class one-hots) → **28** (E11: closing-velocity residuals).
+The current champion is E12, 28-feature `[28,256,128]`, and requires
+`--poll 0.02`. Older checkpoints need their matching `--layers` (e.g.
+`26,256,128` for E8, `20,128,64` for v2b) — and note that only the real-time
+instruments honour it. `main.py --demo` does not truncate, so it can load the
+champion only. See "Saved checkpoints — what still runs" in `README.md`.

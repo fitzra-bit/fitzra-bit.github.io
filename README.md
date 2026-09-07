@@ -92,13 +92,17 @@ side-by-side. That separation is what makes the conversation auditable.
 ## Quick starts
 
 ```bash
-# Dino RL — train (no browser needed), then watch it play
-cd dino_rl && python main.py --agent dqn --jitter --randstart --episodes 8000
-python -m http.server 8766 &   # serve the game for --demo
-# real-time browser (the actual target):
-python main.py --demo --load models/validated_jitter_20260620/best_model.pt
-# sim-only model: perfect under --lockstep, weak in real-time (timing gap):
-python main.py --demo --lockstep --load models/validated_20260612/best_model.pt
+# Dino RL — the sim trains, the real-time browser validates
+cd dino_rl && python main.py --agent dqn --episodes 100000   # sim; dashboard :8765
+
+python -m http.server 8766     # separate shell, from dino_rl/ — the game server
+                               # every real-time tool needs, not just --demo
+python main.py --demo --load models/validated_pollrate_20260710/best_model.pt --poll 0.02
+python gate_battery.py --load models/validated_pollrate_20260710/best_model.pt --episodes 20 --poll 0.02
+
+# NB: the E12 champion above is the ONLY checkpoint that loads against the
+# current 28-feature env. Everything older is pinned to its own era —
+# see dino_rl/README.md "Saved checkpoints — what still runs".
 
 # Factory sim — baseline + all three agents, with HTML reports
 cd factory_sim && pip install -r requirements.txt && python main.py
