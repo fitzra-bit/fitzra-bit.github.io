@@ -151,6 +151,11 @@ The file opens cleanly and all 18 slides are intact.
 was fine for an interview, where a deck can carry a design proposal. It is a
 problem here, because DTX participants will have the code in front of them.
 
+It is also accurate about more than I first credited. Action masking, in-flight
+investments, the scenario library, the three competing optimisers and the
+LLM-orchestrates-tools split are all really there. The forward-looking claims are
+narrower than "the deck oversells":
+
 | The deck says | The code does |
 |---|---|
 | "Built on SimPy — Python discrete event simulation" | No SimPy anywhere. Plain arithmetic. |
@@ -177,7 +182,8 @@ Three honest ways to handle it, in order of effort:
    useful point about the distance between a design and a shipped increment.
 2. **Cut or annotate the over-claiming slides.** Slides 5, 6, 11, 15 and 18
    carry most of it. A shorter deck that matches the code needs no caveats.
-3. **Build the missing pieces.** Real work, and not before this session.
+3. **Build the missing pieces.** Real work, and not before this session — see
+   `BACKLOG.md` at the repo root, which sequences it.
 
 My recommendation is (1) — the gap between "what we designed" and "what we
 built so far" is itself a good thing for new hires to see named openly, and it
